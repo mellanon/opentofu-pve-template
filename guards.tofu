@@ -1,0 +1,80 @@
+# guards.tofu
+#
+# Keeps this configuration away from the VMs that predate it. Pre-existing VMs
+# are already safe by construction — OpenTofu only destroys what is in its
+# state, and none of them were ever imported — so the guards here exist to turn
+# a confusing apply-time collision into a clear plan-time failure.
+#
+# EDIT: set the floor and the protected list to match your node. The validation
+# blocks intentionally repeat the values — they are what stops a tfvars line or
+# a TF_VAR_* override from quietly weakening a guard, so edit them *together*
+# with the defaults, and only ever in a reviewed commit.
+
+variable "managed_vmid_min" {
+  description = "Floor for OpenTofu-managed VMIDs. Everything below is pre-existing and hand-built."
+  type        = number
+  default     = 210
+
+  # Being a variable, the floor could otherwise be lowered from terraform.tfvars
+  # or TF_VAR_managed_vmid_min with nothing in git to show for it. It may only
+  # ever be raised.
+  validation {
+    condition     = var.managed_vmid_min >= 210
+    error_message = "managed_vmid_min may be raised but never lowered below 210; every VMID under 210 is hand-built and off limits."
+  }
+}
+
+variable "protected_vm_ids" {
+  description = <<-EOT
+    VMIDs built before this project, keyed by ID as a string so the failure
+    message can name the VM. Never manage, never import, never destroy.
+  EOT
+
+  type = map(string)
+
+  # EDIT: list your pre-existing VMs. Keep in sync with the validation below.
+  default = {
+    "100" = "debian-template (pre-existing template)"
+    "200" = "important-vm (hand-built)"
+  }
+
+  # An override may add entries but never drop one of the originals - otherwise
+  # a tfvars line could quietly remove a VM from protection.
+  # EDIT: same IDs as the default above.
+  validation {
+    condition = alltrue([
+      for id in ["100", "200"] :
+      contains(keys(var.protected_vm_ids), id)
+    ])
+    error_message = "protected_vm_ids must always contain the pre-existing VMIDs listed in guards.tofu."
+  }
+}
+
+# Read on every plan, so an unreachable node fails the plan rather than silently
+# skipping the collision check. That is the intended trade.
+data "proxmox_virtual_environment_vms" "all" {
+  lifecycle {
+    # /cluster/resources is ACL-filtered, not all-or-nothing: a token whose
+    # ACL has been narrowed gets a shorter list back, not an error, and the
+    # foreign-VM guard would silently see fewer VMs. If the protected VMs are
+    # not all visible, the read cannot be trusted for guarding anything.
+    postcondition {
+      condition = alltrue([
+        for id in keys(var.protected_vm_ids) :
+        contains([for vm in self.vms : tostring(vm.vm_id)], id)
+      ])
+      error_message = "The VM listing from the node is missing at least one protected VMID (${join(", ", keys(var.protected_vm_ids))}). The API token can no longer see the whole node, so the foreign-VM guard cannot be trusted; fix the token's ACL before planning."
+    }
+  }
+}
+
+locals {
+  managed_tag = "opentofu"
+
+  # Everything live on the node that this configuration does not own. Covers VMs
+  # built by hand after adoption, which protected_vm_ids cannot.
+  foreign_vm_ids = [
+    for vm in data.proxmox_virtual_environment_vms.all.vms :
+    vm.vm_id if !contains(vm.tags == null ? [] : vm.tags, local.managed_tag)
+  ]
+}

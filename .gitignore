@@ -1,0 +1,19 @@
+*.tfvars
+*.tfvars.json
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfplan.*
+.terraform/
+.terraform.lock.hcl.bak
+# An OpenTofu/provider panic dumps a TRACE-level ring buffer here - full HTTP
+# traffic including the live API token - regardless of TF_LOG.
+crash.log
+crash.*.log
+keys.txt
+*.agekey
+# Decrypted copies of secrets.enc.json (sops -d > ...).
+*.dec.json
+secrets.json
+/logs/**
+!/logs/.gitkeep

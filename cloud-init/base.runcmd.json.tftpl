@@ -1,0 +1,4 @@
+[
+  ${jsonencode("systemctl enable --now qemu-guest-agent")},
+  ${jsonencode("systemctl disable --now apt-daily.timer apt-daily-upgrade.timer")}
+]

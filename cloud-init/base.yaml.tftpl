@@ -1,0 +1,63 @@
+#cloud-config
+# Rendered by OpenTofu from cloud-init/base.yaml.tftpl - do not edit on the node.
+#
+# Every VM gets this. Role fragments in roles/ are appended after it, so a role
+# must not emit any top-level key that appears below: cloud-init silently drops
+# one of a duplicated pair. That includes bootcmd, emitted below.
+#
+# Every scalar interpolation is jsonencode()d: JSON is a YAML subset, and a raw
+# value containing ': ', '#', or a YAML-1.1 boolean word (an SSH key comment, a
+# hostname like 'no') would otherwise change the document's structure instead
+# of failing loudly.
+hostname: ${jsonencode(vm_name)}
+fqdn: ${jsonencode(fqdn)}
+prefer_fqdn_over_hostname: false
+manage_etc_hosts: true
+timezone: ${jsonencode(timezone)}
+
+users:
+  - name: ${jsonencode(ci_user)}
+    groups: [adm, sudo]
+    shell: /bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    lock_passwd: true
+    ssh_authorized_keys:
+%{~ for key in ssh_public_keys }
+      - ${jsonencode(key)}
+%{~ endfor }
+
+ssh_pwauth: false
+disable_root: true
+
+# bootcmd runs in the init stage - before apt-configure and package install -
+# and on every boot, so these hold for the VM's whole life.
+bootcmd:
+%{~ if archive_snapshot != null }
+  # Pin apt to the Ubuntu archive as of this instant (snapshot.ubuntu.com),
+  # for repeatable package installs. Third-party sources without snapshot
+  # support are fetched normally, unpinned.
+  - ${jsonencode("echo 'APT::Snapshot \"${archive_snapshot}\";' > /etc/apt/apt.conf.d/50cloudinit-snapshot")}
+%{~ endif }
+  # The image ships unattended-upgrades enabled; a test environment must not
+  # change itself. Zeroing the periodic jobs makes apt-daily a no-op (the
+  # stock 20auto-upgrades enables them; apt reads conf.d in order, last wins).
+  - ${jsonencode("printf '%s\\n' 'APT::Periodic::Update-Package-Lists \"0\";' 'APT::Periodic::Unattended-Upgrade \"0\";' > /etc/apt/apt.conf.d/51cloudinit-no-auto-upgrades")}
+
+# package_update is explicit, not load-bearing: cloud-init refreshes the apt
+# indexes whenever `packages:` is non-empty regardless of this setting.
+package_update: true
+package_upgrade: ${jsonencode(package_upgrade)}
+packages:
+%{~ for pkg in packages }
+  - ${jsonencode(pkg)}
+%{~ endfor }
+
+growpart:
+  mode: auto
+  devices: ["/"]
+  ignore_growroot_disabled: false
+
+runcmd:
+%{~ for cmd in runcmd }
+  - ${jsonencode(cmd)}
+%{~ endfor }

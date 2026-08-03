@@ -1,0 +1,42 @@
+# inventory/example.yaml
+#
+# The file name is the VM name (must be a DNS label: lowercase letters, digits,
+# hyphens). Only vm_id is required; everything omitted takes the optional()
+# default from modules/vm/variables.tofu, so a three-line file is a complete
+# VM. Deprovision by deleting this file and running `tofu apply`.
+
+vm_id: 210
+description: "Ubuntu 26.04 cloud image, managed by OpenTofu"
+
+cpu_cores: 2
+memory_mb: 4096
+disk_gb: 32
+
+# Static instead: set both, e.g.
+#   ipv4: 10.0.0.50/24
+#   gateway: 10.0.0.1
+ipv4: dhcp
+
+# Pin apt to the Ubuntu archive as of an instant (snapshot.ubuntu.com) so
+# package installs are repeatable; different VMs can pin different dates.
+# Convention: midnight *after* your image's build serial - the service rounds
+# down, so midnight *of* the serial day serves a state that predates the
+# build. package_upgrade defaults to false - with a pin set, true is also
+# deterministic (upgrades to the pinned date, not to "now").
+#   archive_snapshot: 20260721T000000Z
+#   package_upgrade: true
+
+# Uncomment to make this a docker VM. All four packages are pinned together
+# (they version independently), with the epoch (5:) required in the pin; an
+# archive_snapshot cannot cover download.docker.com, which is why they are
+# pinned explicitly. Current versions: apt-cache madison docker-ce, or the
+# Version: fields in
+# https://download.docker.com/linux/ubuntu/dists/<release>/stable/binary-amd64/Packages
+# role: docker
+# packages:
+#   - docker-ce=5:29.7.1-1~ubuntu.26.04~resolute
+#   - docker-ce-cli=5:29.7.1-1~ubuntu.26.04~resolute
+#   - containerd.io=2.2.6-1~ubuntu.26.04~resolute
+#   - docker-compose-plugin=5.3.1-1~ubuntu.26.04~resolute
+
+tags: ["ubuntu"]
