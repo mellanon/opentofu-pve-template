@@ -23,9 +23,9 @@ lifecycle.
   false. Third-party repos (e.g. docker) are covered by explicit version pins
   in the ansible role defaults instead.
 - **Composable post-boot software (layer 2).** A spec lists ansible roles
-  (`ansible_roles: [nats_server, bun, claude, docker]`) and
+  (`ansible_roles: [nats_server, bun, claude, docker, metafactory_arc]`) and
   `ansible-playbook ansible/site.yaml` applies them — idempotently, with every
-  download SHA256-verified and every version pinned. A dynamic inventory reads
+  download verified and every version pinned. A dynamic inventory reads
   the tofu state, so there is no hosts file to maintain, and changing layer-2
   content never diffs the plan or recreates a VM.
 - **Guardrails for pre-existing VMs.** A VMID floor, a named protected list,
@@ -61,7 +61,8 @@ lifecycle.
 │   ├── ansible.cfg
 │   ├── site.yaml                  # one hostvar-driven play
 │   ├── inventory/tofu.py          # dynamic inventory from tofu output
-│   └── roles/<role>/              # nats_server, bun, claude, docker
+│   └── roles/<role>/              # nats_server, bun, claude, docker,
+│                                  # metafactory_arc
 ├── inventory/             # one YAML file per VM                       [EDIT]
 └── scripts/               # check-cloud-init.sh, check-ansible.sh,
                            # vm-fingerprint.sh
@@ -187,14 +188,17 @@ the same declarative grammar as the rest of the repo:
 - **Role names use underscores** (`nats_server`, not `nats-server`): they
   double as Ansible group names, which must be valid identifiers.
 - **Every download is verified, every version pinned** in the role's
-  `defaults/main.yaml`. The bundled roles show three install patterns:
+  `defaults/main.yaml`. The bundled roles show four install patterns:
   `nats_server` (tarball + upstream `SHA256SUMS` via `get_url checksum=`),
-  `bun` (zip + `SHASUMS256.txt`; needs `unzip` in the VM's packages — the one
-  cross-layer dependency, asserted in-role), `claude` (vendor installer,
-  binary verified against the release manifest first), and `docker` — the
-  only role using `become` — which pins the signing key by full GPG
-  fingerprint, writes a deb822 source, installs version-pinned packages, and
-  manages `daemon.json` with a restart handler.
+  `bun` (zip + `SHASUMS256.txt`; needs `unzip` in the VM's packages —
+  asserted in-role; also owns the `~/.bun/bin` PATH block in `.bashrc`),
+  `claude` (vendor installer, binary verified against the release manifest
+  first), `metafactory_arc` (pinned git tag + `bun install`/`bun link`; needs
+  `git` in the VM's packages, and `bun` earlier in the role list — spec order
+  is application order), and `docker` — the only role using `become` — which
+  pins the signing key by full GPG fingerprint, writes a deb822 source,
+  installs version-pinned packages, and manages `daemon.json` with a restart
+  handler.
 - **Host-key checking is off** in `ansible.cfg` (same stance as
   `vm-fingerprint.sh`): host keys are per-instance noise in a fleet where
   rebuilds are routine, and `accept-new` would poison `known_hosts` on first

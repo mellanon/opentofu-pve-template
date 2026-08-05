@@ -1,5 +1,17 @@
 # Installs the pinned bun into ~/.bun/bin as the login user. No become.
 
+# Same two lines the official installer appends. Note the caveat shared by
+# both: Ubuntu's ~/.bashrc returns early for non-interactive shells, so this
+# serves interactive sessions; ansible tasks and scripts that need bun set
+# PATH explicitly (see the metafactory_arc role).
+- name: Add ~/.bun/bin to the interactive shell PATH
+  ansible.builtin.blockinfile:
+    path: "{{ ansible_user_dir }}/.bashrc"
+    marker: "# {mark} ansible-managed: bun PATH"
+    block: |
+      export BUN_INSTALL="$HOME/.bun"
+      export PATH="$BUN_INSTALL/bin:$PATH"
+
 - name: Probe installed bun version
   ansible.builtin.command: "{{ ansible_user_dir }}/.bun/bin/bun --version"
   register: bun_probe

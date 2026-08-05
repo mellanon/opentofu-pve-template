@@ -30,8 +30,10 @@ ipv4: dhcp
 # Underscore names, one directory each under ansible/roles/; a typo fails at
 # plan time. Changing this list never diffs or recreates the VM. Version pins
 # live in each role's defaults/main.yaml (docker's packages are pinned there
-# because an archive_snapshot cannot cover download.docker.com). The bun role
-# needs 'unzip' in the packages list above.
-#   ansible_roles: [nats_server, bun, claude, docker]
+# because an archive_snapshot cannot cover download.docker.com). Roles apply
+# in list order - metafactory_arc needs bun before it. Cross-layer deps: the
+# bun role needs 'unzip' and metafactory_arc needs 'git' in packages.
+#   packages: [unzip, git]
+#   ansible_roles: [nats_server, bun, claude, docker, metafactory_arc]
 
 tags: ["ubuntu"]

@@ -58,7 +58,10 @@ by recreating the VM; everything softer — installed software and its config �
 lives in `ansible/` and is re-applied any time with
 `ansible-playbook ansible/site.yaml [--limit <vm>]` (after `source tofu.env`,
 which exports `ANSIBLE_CONFIG`; no plan diff, no recreation). A spec opts in
-with `ansible_roles: [nats_server, bun, claude, docker]` — underscore names,
+with `ansible_roles: [nats_server, bun, claude, docker, metafactory_arc]` —
+order matters where roles depend on each other (metafactory_arc needs bun's
+install; the bun role also owns the `~/.bun/bin` PATH block in `.bashrc`,
+which serves interactive shells only). Underscore names,
 each a directory under `ansible/roles/`, typos fail at plan time. The dynamic
 inventory (`ansible/inventory/tofu.py`) reads `tofu output -json vms`, so it
 needs an applied state; versions are pinned in each role's

@@ -66,15 +66,19 @@ done
 
 section "layer2 files"
 # Where the ansible tool roles install (~/.local, ~/.bun), with .local/state
-# pruned (claude lock files). Scoped deliberately: hashing the whole home is
-# non-idempotent by design (.claude.json, timestamped backups, caches).
+# (claude lock files) and the compressed *.npm download blobs in
+# .bun/install/cache excluded - the blobs are not content-stable across
+# installs, unlike the extracted package trees next to them, which are what
+# global/node_modules symlinks into and are covered. Scoped deliberately:
+# hashing the whole home is non-idempotent by design (.claude.json,
+# timestamped backups, caches).
 for d in .local .bun; do
   [ -d "$d" ] || continue
-  find "$d" -path "$d/state" -prune -o -print
+  find "$d" -path "$d/state" -prune -o ! -path "$d/install/cache/*.npm" -print
 done | sort
 for d in .local .bun; do
   [ -d "$d" ] || continue
-  find "$d" -path "$d/state" -prune -o -type f -print0 | xargs -0 -r sha256sum
+  find "$d" -path "$d/state" -prune -o -type f ! -path "$d/install/cache/*.npm" -print0 | xargs -0 -r sha256sum
 done | sort -k2
 
 section "layer2 versions"
@@ -84,6 +88,11 @@ section "layer2 versions"
 # effects, and the symlink target is the version claim (the binary itself is
 # hashed above).
 [ -L .local/bin/claude ] && readlink .local/bin/claude
+# arc lives in ~/arc (deliberately not hashed - node_modules is large and
+# the lockfile owns its determinism); the pinned tag is the version claim.
+# NOTE: this whole remote script is single-quoted - no apostrophes anywhere.
+[ -L .bun/bin/arc ] && readlink .bun/bin/arc
+[ -d arc/.git ] && git -C arc describe --tags
 
 section "docker daemon"
 [ -e /etc/docker/daemon.json ] && { echo "--- /etc/docker/daemon.json"; cat /etc/docker/daemon.json; }
