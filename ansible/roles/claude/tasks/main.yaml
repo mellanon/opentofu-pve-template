@@ -1,0 +1,66 @@
+# Installs the pinned Claude Code via the vendor installer, as the login
+# user, no become. Observed layout: the versioned binary lands at
+# ~/.local/share/claude/versions/<ver> with ~/.local/bin/claude symlinked to
+# it. The skip-guard below matters beyond speed: re-running the installer
+# rewrites ~/.claude.json and drops a fresh timestamped backup under
+# ~/.claude/backups/ every time, which would break idempotence.
+#
+# If a future installer version demands a TTY, the declarative fallback is to
+# get_url the verified binary straight to versions/<ver> and symlink
+# ~/.local/bin/claude to it - that reproduces the entire observed layout.
+
+- name: Probe installed claude version binary
+  ansible.builtin.stat:
+    path: "{{ ansible_user_dir }}/.local/share/claude/versions/{{ claude_version }}"
+  register: claude_version_bin
+
+- name: Probe ~/.local/bin/claude symlink
+  ansible.builtin.stat:
+    path: "{{ ansible_user_dir }}/.local/bin/claude"
+    follow: false
+  register: claude_link
+
+- name: Install claude {{ claude_version }}
+  when: >-
+    not (claude_version_bin.stat.exists
+         and (claude_link.stat.islnk | default(false))
+         and (claude_link.stat.lnk_source | default('')).endswith('/versions/' + claude_version))
+  vars:
+    claude_release_url: "https://downloads.claude.ai/claude-code-releases/{{ claude_version }}"
+  block:
+    - name: Create scratch directory
+      ansible.builtin.tempfile:
+        state: directory
+      register: claude_tmp
+
+    - name: Fetch release manifest
+      ansible.builtin.uri:
+        url: "{{ claude_release_url }}/manifest.json"
+        return_content: true
+      register: claude_manifest
+
+    - name: Check the manifest checksum is a plausible SHA256
+      ansible.builtin.assert:
+        that:
+          - claude_manifest.json.platforms['linux-x64'].checksum is match('^[a-f0-9]{64}$')
+        fail_msg: "manifest.json carries no valid linux-x64 SHA256 checksum"
+
+    - name: Download binary, verified against the manifest checksum
+      ansible.builtin.get_url:
+        url: "{{ claude_release_url }}/linux-x64/claude"
+        dest: "{{ claude_tmp.path }}/claude"
+        checksum: "sha256:{{ claude_manifest.json.platforms['linux-x64'].checksum }}"
+        mode: "0755"
+
+    - name: Run the vendor installer
+      ansible.builtin.command:
+        cmd: "./claude install {{ claude_version }}"
+        chdir: "{{ claude_tmp.path }}"
+      changed_when: true  # only reached when the probe found this version absent
+
+  always:
+    - name: Remove scratch directory
+      ansible.builtin.file:
+        path: "{{ claude_tmp.path }}"
+        state: absent
+      when: claude_tmp.path is defined

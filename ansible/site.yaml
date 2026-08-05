@@ -1,0 +1,12 @@
+# Applies each VM's spec-declared ansible_roles (inventory/<vm>.yaml ->
+# tofu output -> inventory/tofu.py hostvars). Adding a role to a VM never
+# touches this file; per-VM ordering follows the spec's list. A role name
+# with no ansible/roles/ directory fails loudly here AND at tofu plan time -
+# never a silent no-op.
+- name: Apply per-VM ansible roles
+  hosts: vms
+  tasks:
+    - name: Include each role the VM's spec declares
+      ansible.builtin.include_role:
+        name: "{{ item }}"
+      loop: "{{ vm_ansible_roles }}"

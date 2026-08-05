@@ -1,0 +1,63 @@
+# Installs the pinned bun into ~/.bun/bin as the login user. No become.
+
+- name: Probe installed bun version
+  ansible.builtin.command: "{{ ansible_user_dir }}/.bun/bin/bun --version"
+  register: bun_probe
+  changed_when: false
+  failed_when: false
+
+- name: Install bun {{ bun_version }}
+  when: (bun_probe.stdout | default('') | trim) != bun_version
+  vars:
+    bun_release_url: "https://github.com/oven-sh/bun/releases/download/bun-v{{ bun_version }}"
+  block:
+    - name: Probe for unzip (unarchive needs it for .zip)  # noqa: command-instead-of-module
+      ansible.builtin.command: unzip -v
+      register: bun_unzip_probe
+      changed_when: false
+      failed_when: false
+
+    - name: Refuse to continue without unzip
+      ansible.builtin.fail:
+        msg: >-
+          The bun role needs 'unzip' on the guest; add it to the VM spec's
+          packages list (layer 1) and reprovision, or install it by hand.
+      when: bun_unzip_probe.rc != 0
+
+    - name: Create scratch directory
+      ansible.builtin.tempfile:
+        state: directory
+      register: bun_tmp
+
+    - name: Ensure ~/.bun/bin exists
+      ansible.builtin.file:
+        path: "{{ ansible_user_dir }}/.bun/bin"
+        state: directory
+        mode: "0755"
+
+    - name: Download zip, verified against upstream SHASUMS256.txt
+      ansible.builtin.get_url:
+        url: "{{ bun_release_url }}/bun-linux-x64.zip"
+        dest: "{{ bun_tmp.path }}/bun-linux-x64.zip"
+        checksum: "sha256:{{ bun_release_url }}/SHASUMS256.txt"
+        mode: "0644"
+
+    - name: Unpack
+      ansible.builtin.unarchive:
+        src: "{{ bun_tmp.path }}/bun-linux-x64.zip"
+        dest: "{{ bun_tmp.path }}"
+        remote_src: true
+
+    - name: Install binary
+      ansible.builtin.copy:
+        src: "{{ bun_tmp.path }}/bun-linux-x64/bun"
+        dest: "{{ ansible_user_dir }}/.bun/bin/bun"
+        mode: "0755"
+        remote_src: true
+
+  always:
+    - name: Remove scratch directory
+      ansible.builtin.file:
+        path: "{{ bun_tmp.path }}"
+        state: absent
+      when: bun_tmp.path is defined

@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# Validate every cloud-init role combination that this configuration can emit.
+# Validate the cloud-init user-data this configuration emits.
 #
 # `tofu validate` checks HCL and never sees the YAML that comes out of
-# templatefile(), so this closes that gap. It renders base.yaml.tftpl on its own
-# and then paired with each role under cloud-init/roles/ - both the YAML
-# fragment and the runcmd file, so the runcmd list is the real one, not a copy -
-# and checks three things per combination:
+# templatefile(), so this closes that gap. It renders base.yaml.tftpl with the
+# real runcmd list (from base.runcmd.json.tftpl, the same source the module
+# reads) and checks three things:
 #
 #   1. the result parses as YAML with no duplicate mapping keys anywhere
 #      (cloud-init silently drops one of a duplicated pair)
@@ -66,15 +65,10 @@ render() {
     || { echo "render failed:" >&2; cat "$workdir/err" >&2; return 1; }
 }
 
-# The runcmd list a VM of the given role actually gets, built from the same
-# files modules/vm/roles.tofu reads. "" means no role.
+# The runcmd list a VM actually gets, built from the same file
+# modules/vm/main.tofu reads.
 runcmd_expr() {
-  local role="$1"
-  local expr='jsondecode(templatefile("./cloud-init/base.runcmd.json.tftpl", { ci_user = "ubuntu", vm_name = "checkvm" }))'
-  if [ -n "$role" ] && [ -e "cloud-init/roles/${role}.runcmd.json.tftpl" ]; then
-    expr="concat(${expr}, jsondecode(templatefile(\"./cloud-init/roles/${role}.runcmd.json.tftpl\", { ci_user = \"ubuntu\", vm_name = \"checkvm\" })))"
-  fi
-  printf '%s' "$expr"
+  printf '%s' 'jsondecode(templatefile("./cloud-init/base.runcmd.json.tftpl", { ci_user = "ubuntu", vm_name = "checkvm" }))'
 }
 
 # base_expr <vm_name> <ssh_key> <package> <runcmd_expr> <snapshot_expr> <upgrade>
@@ -128,52 +122,21 @@ check_schema() {
   return 0
 }
 
-# Role matrix: the union of fragment files and runcmd files, so a role that
-# only has one of its two pieces is still covered.
-declare -A role_set=()
-for f in cloud-init/roles/*.yaml.tftpl; do
-  [ -e "$f" ] || continue
-  role_set["$(basename "$f" .yaml.tftpl)"]=1
-done
-for f in cloud-init/roles/*.runcmd.json.tftpl; do
-  [ -e "$f" ] || continue
-  role_set["$(basename "$f" .runcmd.json.tftpl)"]=1
-done
-roles=("")
-while IFS= read -r r; do
-  [ -n "$r" ] && roles+=("$r")
-done < <(printf '%s\n' "${!role_set[@]}" | sort)
-
 status=0
-for role in "${roles[@]}"; do
-  label="${role:-<no role>}"
-  out="$workdir/${role:-base}.yaml"
+label="base"
+out="$workdir/base.yaml"
 
-  if ! render "$(base_expr checkvm "ssh-ed25519 AAAA check@local" qemu-guest-agent "$(runcmd_expr "$role")" null false)" >"$out"; then
-    echo "FAIL  ${label}: render (base)"
-    status=1
-    continue
-  fi
-  if [ -n "$role" ] && [ -e "cloud-init/roles/${role}.yaml.tftpl" ]; then
-    printf '\n' >>"$out"
-    if ! render "jsonencode(templatefile(\"./cloud-init/roles/${role}.yaml.tftpl\", { vm_name = \"checkvm\", ci_user = \"ubuntu\" }))" >>"$out"; then
-      echo "FAIL  ${label}: render (fragment)"
-      status=1
-      continue
-    fi
-  fi
-
-  if ! check_yaml "$out"; then
-    echo "FAIL  ${label}: YAML/duplicate-key check"
-    status=1
-    continue
-  fi
-  if check_schema "$out" "$label"; then
-    echo "ok    ${label}"
-  else
-    status=1
-  fi
-done
+if ! render "$(base_expr checkvm "ssh-ed25519 AAAA check@local" qemu-guest-agent "$(runcmd_expr)" null false)" >"$out"; then
+  echo "FAIL  ${label}: render (base)"
+  status=1
+elif ! check_yaml "$out"; then
+  echo "FAIL  ${label}: YAML/duplicate-key check"
+  status=1
+elif check_schema "$out" "$label"; then
+  echo "ok    ${label}"
+else
+  status=1
+fi
 
 # Adversarial pass: values shaped to break unescaped YAML interpolation, plus
 # the snapshot pin and package_upgrade=true so the conditional bootcmd block
@@ -183,7 +146,7 @@ adv_pkg='foo # bar'
 adv_name='no'
 adv_snapshot='20260801T000000Z'
 out="$workdir/adversarial.yaml"
-if ! render "$(base_expr "$adv_name" "$adv_key" "$adv_pkg" "$(runcmd_expr "")" "\"$adv_snapshot\"" true)" >"$out"; then
+if ! render "$(base_expr "$adv_name" "$adv_key" "$adv_pkg" "$(runcmd_expr)" "\"$adv_snapshot\"" true)" >"$out"; then
   echo "FAIL  <adversarial>: render"
   status=1
 elif ! check_yaml "$out"; then

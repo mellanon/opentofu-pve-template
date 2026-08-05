@@ -29,6 +29,7 @@ module "vm" {
 
   # Fleet-wide settings, stated once here rather than repeated per inventory file.
   cloud_init_dir      = "${path.module}/cloud-init"
+  ansible_dir         = "${path.module}/ansible"
   pve_node            = var.pve_node
   cloud_image_file_id = var.cloud_image_file_id
   snippet_datastore   = var.snippet_datastore

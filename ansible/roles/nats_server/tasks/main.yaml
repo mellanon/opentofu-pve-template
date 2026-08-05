@@ -1,0 +1,52 @@
+# Installs the pinned nats-server into ~/.local/bin as the login user.
+# No become anywhere: layer 2 tool installs are user-space by construction.
+
+- name: Probe installed nats-server version
+  ansible.builtin.command: "{{ ansible_user_dir }}/.local/bin/nats-server --version"
+  register: nats_probe
+  changed_when: false
+  failed_when: false
+
+- name: Install nats-server {{ nats_server_version }}
+  when: nats_server_version not in (nats_probe.stdout | default(''))
+  vars:
+    nats_pkg: "nats-server-v{{ nats_server_version }}-linux-amd64"
+    nats_release_url: "https://github.com/nats-io/nats-server/releases/download/v{{ nats_server_version }}"
+  block:
+    - name: Create scratch directory
+      ansible.builtin.tempfile:
+        state: directory
+      register: nats_tmp
+
+    - name: Ensure ~/.local/bin exists
+      ansible.builtin.file:
+        path: "{{ ansible_user_dir }}/.local/bin"
+        state: directory
+        mode: "0755"
+
+    - name: Download tarball, verified against upstream SHA256SUMS
+      ansible.builtin.get_url:
+        url: "{{ nats_release_url }}/{{ nats_pkg }}.tar.gz"
+        dest: "{{ nats_tmp.path }}/{{ nats_pkg }}.tar.gz"
+        checksum: "sha256:{{ nats_release_url }}/SHA256SUMS"
+        mode: "0644"
+
+    - name: Unpack
+      ansible.builtin.unarchive:
+        src: "{{ nats_tmp.path }}/{{ nats_pkg }}.tar.gz"
+        dest: "{{ nats_tmp.path }}"
+        remote_src: true
+
+    - name: Install binary
+      ansible.builtin.copy:
+        src: "{{ nats_tmp.path }}/{{ nats_pkg }}/nats-server"
+        dest: "{{ ansible_user_dir }}/.local/bin/nats-server"
+        mode: "0755"
+        remote_src: true
+
+  always:
+    - name: Remove scratch directory
+      ansible.builtin.file:
+        path: "{{ nats_tmp.path }}"
+        state: absent
+      when: nats_tmp.path is defined

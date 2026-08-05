@@ -12,6 +12,17 @@ locals {
   # read back differently and produce a perpetual diff.
   tags = sort(distinct(concat([var.managed_tag], var.spec.tags)))
 
+  # The runcmd list lives in cloud-init/base.runcmd.json.tftpl rather than in
+  # HCL so that scripts/check-cloud-init.sh renders the exact same source this
+  # module does; a hand-copied literal in the check script is how commands
+  # escaped validation before.
+  runcmd = jsondecode(
+    templatefile("${var.cloud_init_dir}/base.runcmd.json.tftpl", {
+      ci_user = var.ci_user
+      vm_name = var.vm_name
+    })
+  )
+
   base_user_data = templatefile("${var.cloud_init_dir}/base.yaml.tftpl", {
     vm_name          = var.vm_name
     fqdn             = local.fqdn
@@ -24,25 +35,7 @@ locals {
     package_upgrade  = var.spec.package_upgrade
   })
 
-  # A cloud-config is a single YAML mapping, so a role fragment appends valid
-  # top-level keys. A role must never emit a key base.yaml.tftpl already emits:
-  # duplicate top-level keys make cloud-init silently drop one.
-  # The fragment is optional (a role may only carry runcmds; see roles.tofu);
-  # variables.tofu rejects a role that has neither piece.
-  role_fragment_file = var.spec.role == null ? null : "${var.cloud_init_dir}/roles/${var.spec.role}.yaml.tftpl"
-
-  role_user_data = local.role_fragment_file != null && fileexists(coalesce(local.role_fragment_file, "-")) ? templatefile(
-    local.role_fragment_file,
-    {
-      vm_name = var.vm_name
-      ci_user = var.ci_user
-    },
-  ) : ""
-
-  user_data = join("\n", compact([
-    trimspace(local.base_user_data),
-    trimspace(local.role_user_data),
-  ]))
+  user_data = trimspace(local.base_user_data)
 }
 
 # Uploaded over SSH: the ProxMox API exposes no endpoint for snippets.

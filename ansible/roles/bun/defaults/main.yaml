@@ -1,0 +1,2 @@
+# Pinned fleet-wide; verified against the upstream SHASUMS256.txt at download.
+bun_version: "1.3.14"

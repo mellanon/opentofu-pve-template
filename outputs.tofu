@@ -12,6 +12,8 @@ output "vms" {
       vm_id          = vm.vm_id
       ipv4_addresses = vm.ipv4_addresses
       ssh_command    = vm.ssh_command
+      ansible_roles  = vm.ansible_roles
+      ansible_user   = var.ci_user
     }
   }
 }

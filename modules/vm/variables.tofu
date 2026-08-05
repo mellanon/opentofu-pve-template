@@ -19,7 +19,6 @@ variable "spec" {
 
   type = object({
     vm_id       = number
-    role        = optional(string)
     description = optional(string)
     cpu_cores   = optional(number, 2)
     memory_mb   = optional(number, 4096)
@@ -45,6 +44,12 @@ variable "spec" {
     # true is also deterministic when archive_snapshot is set - the base
     # upgrades to the pinned date instead of to "now".
     package_upgrade = optional(bool, false)
+
+    # Ansible roles under ansible/roles/ applied post-boot (layer 2). Unlike
+    # cloud-init settings, changing this never diffs or recreates the VM -
+    # re-running ansible-playbook is the whole deployment. Removing an entry
+    # does not uninstall; clean removal is a rebuild.
+    ansible_roles = optional(list(string), [])
   })
 
   validation {
@@ -63,21 +68,16 @@ variable "spec" {
   }
 
   validation {
-    condition     = var.spec.role == null || can(regex("^[a-z0-9-]+$", var.spec.role))
-    error_message = "spec.role must be a bare role name (lowercase letters, digits, hyphens); it selects files under cloud-init/roles/."
-  }
-
-  validation {
     condition     = var.spec.archive_snapshot == null || can(regex("^[0-9]{8}T[0-9]{6}Z$", var.spec.archive_snapshot))
     error_message = "spec.archive_snapshot must be a snapshot.ubuntu.com ID like 20260801T000000Z (UTC, YYYYMMDDTHHMMSSZ)."
   }
 
   validation {
-    condition = var.spec.role == null || (
-      fileexists("${var.cloud_init_dir}/roles/${var.spec.role}.yaml.tftpl") ||
-      fileexists("${var.cloud_init_dir}/roles/${var.spec.role}.runcmd.json.tftpl")
-    )
-    error_message = "spec.role names no file under cloud-init/roles/ - expected <role>.yaml.tftpl and/or <role>.runcmd.json.tftpl. A typo here would otherwise silently drop the role's commands."
+    condition = alltrue([
+      for r in var.spec.ansible_roles :
+      can(regex("^[a-z][a-z0-9_]*$", r)) && fileexists("${var.ansible_dir}/roles/${r}/tasks/main.yaml")
+    ])
+    error_message = "each spec.ansible_roles entry must be lowercase letters/digits/underscores and name a directory under ansible/roles/ containing tasks/main.yaml. Underscores, not hyphens: Ansible group names must be valid identifiers. A typo here would otherwise fail only at ansible-playbook time."
   }
 
   validation {
@@ -92,7 +92,12 @@ variable "spec" {
 }
 
 variable "cloud_init_dir" {
-  description = "Directory holding base.yaml.tftpl and roles/. Passed in so the module does not reach out with ../.."
+  description = "Directory holding the cloud-init templates. Passed in so the module does not reach out with ../.."
+  type        = string
+}
+
+variable "ansible_dir" {
+  description = "Directory holding ansible/roles/. Passed in so the module does not reach out with ../.."
   type        = string
 }
 

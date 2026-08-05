@@ -18,6 +18,11 @@ output "ipv4_addresses" {
   ]
 }
 
+output "ansible_roles" {
+  description = "Ansible roles the spec declares for this VM (layer 2)."
+  value       = var.spec.ansible_roles
+}
+
 output "ssh_command" {
   description = "Ready-to-run SSH command for the cloud-init user."
   value = format(

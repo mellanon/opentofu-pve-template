@@ -1,7 +1,8 @@
 # OpenTofu provisioning for ProxMox VE
 
 Infrastructure as code for provisioning and deprovisioning VMs on ProxMox VE.
-Two layers: OpenTofu drives the hypervisor, cloud-init configures the guest.
+Three layers: OpenTofu drives the hypervisor, cloud-init gives the guest its
+boot-time identity, and Ansible installs software post-boot.
 See README.md for setup; this file is what a working session needs that is not
 obvious from reading the code.
 
@@ -52,11 +53,27 @@ After touching anything under `cloud-init/`, run
 `./scripts/check-cloud-init.sh`. `tofu validate` checks HCL and structurally
 never sees the YAML that comes out of `templatefile()`.
 
+**Layer 2 — Ansible.** Cloud-init is decided at first boot and reachable only
+by recreating the VM; everything softer — installed software and its config —
+lives in `ansible/` and is re-applied any time with
+`ansible-playbook ansible/site.yaml [--limit <vm>]` (after `source tofu.env`,
+which exports `ANSIBLE_CONFIG`; no plan diff, no recreation). A spec opts in
+with `ansible_roles: [nats_server, bun, claude, docker]` — underscore names,
+each a directory under `ansible/roles/`, typos fail at plan time. The dynamic
+inventory (`ansible/inventory/tofu.py`) reads `tofu output -json vms`, so it
+needs an applied state; versions are pinned in each role's
+`defaults/main.yaml`. Removing a role from the list does **not** uninstall it —
+clean removal is a rebuild. Runs are idempotent (second run reports
+changed=0). After touching anything under `ansible/`, run
+`./scripts/check-ansible.sh`.
+
 `./scripts/vm-fingerprint.sh <user>@<ip> fingerprints/<name>.txt` captures a
-VM's environment fingerprint (packages, apt config, enabled units, users —
-excluding per-instance noise like host keys and machine-id) into a tracked
-file. Rebuild verification: capture, commit, destroy + reprovision, capture
-to the same path — an empty `git diff` proves the environment is identical.
+VM's environment fingerprint (packages, apt config, enabled units, users, and
+the ansible-installed layer-2 files under `~/.local` and `~/.bun` — excluding
+per-instance noise like host keys and machine-id) into a tracked file.
+Rebuild verification: capture, commit, destroy + reprovision, run
+`ansible-playbook ansible/site.yaml`, capture to the same path — an empty
+`git diff` proves the environment is identical.
 
 ## Gotchas that have already cost time
 
@@ -73,13 +90,10 @@ to the same path — an empty `git diff` proves the environment is identical.
 - **An `@pve`-realm token cannot SSH anywhere.** It exists only in ProxMox's
   user database — it is not a Linux account. The API identity and the SSH
   identity can never be unified.
-- **A role fragment must not emit any top-level key that `base.yaml.tftpl`
-  already emits.** A cloud-config is one YAML mapping; duplicates get silently
-  dropped. Because base owns `runcmd` (and `bootcmd`), role commands live in
-  `cloud-init/roles/<role>.runcmd.json.tftpl` — that is why a role is up to
-  two pieces, both under `cloud-init/roles/`. Either piece is optional but a
-  named role must have at least one; the check script and the module read the
-  same files, so the two halves cannot drift.
+- **A cloud-config is one YAML mapping; duplicate top-level keys get silently
+  dropped.** That is why `base.yaml.tftpl` is the entire document and nothing
+  is ever appended to it — post-boot software belongs in an ansible role, not
+  in cloud-init.
 - **Every scalar interpolated into a cloud-init template must be
   `jsonencode()`d.** JSON is a YAML subset; a raw SSH key comment containing
   `: ` becomes a YAML mapping (VM boots with no authorized keys), a package
@@ -95,8 +109,9 @@ to the same path — an empty `git diff` proves the environment is identical.
   writes `APT::Snapshot` into apt.conf.d (bootcmd runs init-stage, before
   apt-configure and package install; an apt.conf.d file survives cloud-init
   regenerating `ubuntu.sources`). Official archive only — third-party repos
-  like docker are not snapshotted; pin those with `name=version` entries in
-  `packages:`. `package_upgrade` defaults to **false**; `package_update: true`
+  like docker are not snapshotted, which is why the docker ansible role pins
+  exact package versions in its defaults instead.
+  `package_upgrade` defaults to **false**; `package_update: true`
   is explicit but not load-bearing — cloud-init refreshes indexes whenever
   `packages:` is non-empty. unattended-upgrades is disabled fleet-wide (the
   image ships it enabled): base's `bootcmd` zeros the `APT::Periodic` jobs and

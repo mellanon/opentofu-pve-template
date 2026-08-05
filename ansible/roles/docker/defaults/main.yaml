@@ -1,0 +1,14 @@
+# download.docker.com has no snapshot service, so a VM's archive_snapshot
+# cannot pin these; the explicit versions below (epoch included) are the pin.
+# Current versions: apt-cache madison docker-ce on a guest, or the Version:
+# fields in
+# https://download.docker.com/linux/ubuntu/dists/resolute/stable/binary-amd64/Packages
+docker_packages:
+  - docker-ce=5:29.7.1-1~ubuntu.26.04~resolute
+  - docker-ce-cli=5:29.7.1-1~ubuntu.26.04~resolute
+  - containerd.io=2.2.6-1~ubuntu.26.04~resolute
+  - docker-compose-plugin=5.3.1-1~ubuntu.26.04~resolute
+
+# Docker's signing key, pinned by full fingerprint: a bare signed-by URL
+# would trust whatever download.docker.com serves.
+docker_gpg_fingerprint: "9DC858229FC7DD38854AE2D88D81803C0EBFCD88"

@@ -1,9 +1,10 @@
 #cloud-config
 # Rendered by OpenTofu from cloud-init/base.yaml.tftpl - do not edit on the node.
 #
-# Every VM gets this. Role fragments in roles/ are appended after it, so a role
-# must not emit any top-level key that appears below: cloud-init silently drops
-# one of a duplicated pair. That includes bootcmd, emitted below.
+# Every VM gets this, and only this: post-boot software is Ansible's job
+# (ansible/, layer 2), not cloud-init's. A cloud-config is a single YAML
+# mapping - cloud-init silently drops one of any duplicated top-level pair -
+# so nothing may ever be appended to this render.
 #
 # Every scalar interpolation is jsonencode()d: JSON is a YAML subset, and a raw
 # value containing ': ', '#', or a YAML-1.1 boolean word (an SSH key comment, a

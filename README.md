@@ -6,8 +6,10 @@ environments**: the environment around the software under test stays fixed —
 same image, same package versions — while the software varies, and several VM
 configurations can run side by side.
 
-Two layers: OpenTofu drives the hypervisor (bpg/proxmox provider), cloud-init
-configures the guest.
+Three layers: OpenTofu drives the hypervisor (bpg/proxmox provider),
+cloud-init gives the guest its boot-time identity, and Ansible installs
+software post-boot — re-appliable at any time without touching the VM
+lifecycle.
 
 ## What you get
 
@@ -18,8 +20,14 @@ configures the guest.
 - **Repeatable environments.** Per-VM `archive_snapshot:` pins apt to
   [snapshot.ubuntu.com](https://snapshot.ubuntu.com) at a chosen instant, so
   package installs resolve identically forever; `package_upgrade` defaults to
-  false. Third-party repos (e.g. docker) are covered by explicit
-  `name=version` pins in the package list instead.
+  false. Third-party repos (e.g. docker) are covered by explicit version pins
+  in the ansible role defaults instead.
+- **Composable post-boot software (layer 2).** A spec lists ansible roles
+  (`ansible_roles: [nats_server, bun, claude, docker]`) and
+  `ansible-playbook ansible/site.yaml` applies them — idempotently, with every
+  download SHA256-verified and every version pinned. A dynamic inventory reads
+  the tofu state, so there is no hosts file to maintain, and changing layer-2
+  content never diffs the plan or recreates a VM.
 - **Guardrails for pre-existing VMs.** A VMID floor, a named protected list,
   and a live check that refuses to plan against any VM on the node not tagged
   `opentofu` — with validations that prevent the guards themselves from being
@@ -28,12 +36,13 @@ configures the guest.
 - **Encrypted state and plans** (pbkdf2 + AES-GCM, `enforced = true`), secrets
   via sops/age, and a `.gitignore` that covers the sharp edges (`crash.log`
   contains a TRACE-level dump including the API token, regardless of TF_LOG).
-- **A real validation gate for cloud-init.** `tofu validate` never sees the
-  YAML that comes out of `templatefile()`; `scripts/check-cloud-init.sh`
-  renders every role combination plus an adversarial fixture (SSH key comment
-  containing `: `, package containing `#`, hostname that is a YAML boolean)
-  and runs duplicate-key and `cloud-init schema` checks, treating deprecation
-  warnings as failures.
+- **Real validation gates.** `tofu validate` never sees the YAML that comes
+  out of `templatefile()`; `scripts/check-cloud-init.sh` renders the real
+  user-data plus an adversarial fixture (SSH key comment containing `: `,
+  package containing `#`, hostname that is a YAML boolean) and runs
+  duplicate-key and `cloud-init schema` checks, treating deprecation warnings
+  as failures. `scripts/check-ansible.sh` asserts the dynamic inventory's
+  shape and syntax-checks (and, when installed, lints) the playbook.
 
 ## Layout
 
@@ -46,19 +55,23 @@ configures the guest.
 ├── outputs.tofu
 ├── modules/vm/            # the contract: what a VM is
 ├── cloud-init/
-│   ├── base.yaml.tftpl            # every VM gets this
-│   ├── base.runcmd.json.tftpl     # commands every VM runs
-│   └── roles/
-│       ├── <role>.yaml.tftpl        # extra top-level cloud-config keys
-│       └── <role>.runcmd.json.tftpl # extra commands for that role
+│   ├── base.yaml.tftpl            # every VM gets this - the whole document
+│   └── base.runcmd.json.tftpl     # commands every VM runs
+├── ansible/               # layer 2: post-boot software
+│   ├── ansible.cfg
+│   ├── site.yaml                  # one hostvar-driven play
+│   ├── inventory/tofu.py          # dynamic inventory from tofu output
+│   └── roles/<role>/              # nats_server, bun, claude, docker
 ├── inventory/             # one YAML file per VM                       [EDIT]
-└── scripts/check-cloud-init.sh
+└── scripts/               # check-cloud-init.sh, check-ansible.sh,
+                           # vm-fingerprint.sh
 ```
 
 ## Prerequisites
 
-- OpenTofu >= 1.10, `sops`, `age`, and (for the check script) `python3-yaml`
-  and `cloud-init` on the workstation.
+- OpenTofu >= 1.10, `sops`, `age`, `ansible` (ansible-core >= 2.15;
+  `ansible-lint` optional), and (for the cloud-init check script)
+  `python3-yaml` and `cloud-init` on the workstation.
 - A ProxMox VE node (built against 9.x) with:
   - a datastore that allows the `snippets` content type (`local` by default;
     lvmthin cannot hold snippets),
@@ -134,27 +147,60 @@ configures the guest.
 
 - **Add a VM:** create `inventory/<name>.yaml` (the file name becomes the VM
   name and hostname — DNS label rules apply) and `tofu apply`. See
-  `inventory/example.yaml` for every knob including snapshot pinning and the
-  docker role.
+  `inventory/example.yaml` for every knob including snapshot pinning and
+  ansible roles.
 - **Remove a VM:** `git mv inventory/<name>.yaml inventory/destroy/` and
   `tofu apply` — only `inventory/*.yaml` is scanned, so the spec stays in the
   repo while the VM, its disk, and its snippet are destroyed. Moving it back
   provisions a fresh VM (all guest data is gone). To keep a VM but power it
   off, set `started: false` instead.
-- **Roles:** a role is up to two files under `cloud-init/roles/` — a YAML
-  fragment for extra top-level cloud-config keys and a
-  `<role>.runcmd.json.tftpl` for commands. Either is optional, but a named
-  role must have at least one. A fragment must never emit a top-level key
-  `base.yaml.tftpl` already emits (cloud-init silently drops one of a
-  duplicated pair — this is why role commands are a separate file).
+- **Install software (layer 2):** list roles in the spec
+  (`ansible_roles: [docker, ...]`) and run
+  `ansible-playbook ansible/site.yaml [--limit <vm>]` — no plan diff, no
+  recreation, idempotent (second run reports changed=0). Removing a role from
+  the list does *not* uninstall it; clean removal is a rebuild.
 - **After touching anything under `cloud-init/`:** run
-  `./scripts/check-cloud-init.sh`.
+  `./scripts/check-cloud-init.sh`. **Under `ansible/`:**
+  `./scripts/check-ansible.sh`.
 - **Prove a rebuild is identical:**
   `./scripts/vm-fingerprint.sh ubuntu@<ip> fingerprints/<name>.txt` captures
-  the VM's environment (packages, apt config, enabled units, users — minus
-  per-instance noise like host keys and machine-id) into a tracked file.
-  Capture, commit, destroy + reprovision, capture again to the same path:
-  an empty `git diff` is the proof.
+  the VM's environment (packages, apt config, enabled units, users, and the
+  ansible-installed files — minus per-instance noise like host keys and
+  machine-id) into a tracked file. Capture, commit, destroy + reprovision,
+  re-run ansible, capture again to the same path: an empty `git diff` is the
+  proof, now spanning both layers.
+
+## Layer 2: Ansible
+
+Cloud-init is decided at first boot and reachable only by recreating the VM —
+that is the right place for identity, network, and the apt baseline, and the
+wrong place for software. Everything softer lives in `ansible/` and follows
+the same declarative grammar as the rest of the repo:
+
+- **Specs declare, roles implement.** `ansible_roles:` in a VM's YAML rides
+  through the module into `tofu output -json vms`;
+  `ansible/inventory/tofu.py` (python3 stdlib only, no galaxy dependencies)
+  reshapes that output into hosts, one group per role, and hostvars.
+  `site.yaml` is a single play that `include_role`s each host's declared
+  list, so adding a role never touches it, and a typo'd role name fails at
+  `tofu plan` time via a `fileexists()` validation in the spec contract.
+- **Role names use underscores** (`nats_server`, not `nats-server`): they
+  double as Ansible group names, which must be valid identifiers.
+- **Every download is verified, every version pinned** in the role's
+  `defaults/main.yaml`. The bundled roles show three install patterns:
+  `nats_server` (tarball + upstream `SHA256SUMS` via `get_url checksum=`),
+  `bun` (zip + `SHASUMS256.txt`; needs `unzip` in the VM's packages — the one
+  cross-layer dependency, asserted in-role), `claude` (vendor installer,
+  binary verified against the release manifest first), and `docker` — the
+  only role using `become` — which pins the signing key by full GPG
+  fingerprint, writes a deb822 source, installs version-pinned packages, and
+  manages `daemon.json` with a restart handler.
+- **Host-key checking is off** in `ansible.cfg` (same stance as
+  `vm-fingerprint.sh`): host keys are per-instance noise in a fleet where
+  rebuilds are routine, and `accept-new` would poison `known_hosts` on first
+  contact then hard-fail after every rebuild.
+- **Unreachable VMs** (powered off, or the guest agent not up) are skipped by
+  the inventory with a stderr notice instead of failing the whole run.
 
 ## Credentials
 

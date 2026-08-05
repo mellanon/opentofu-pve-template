@@ -26,17 +26,12 @@ ipv4: dhcp
 #   archive_snapshot: 20260721T000000Z
 #   package_upgrade: true
 
-# Uncomment to make this a docker VM. All four packages are pinned together
-# (they version independently), with the epoch (5:) required in the pin; an
-# archive_snapshot cannot cover download.docker.com, which is why they are
-# pinned explicitly. Current versions: apt-cache madison docker-ce, or the
-# Version: fields in
-# https://download.docker.com/linux/ubuntu/dists/<release>/stable/binary-amd64/Packages
-# role: docker
-# packages:
-#   - docker-ce=5:29.7.1-1~ubuntu.26.04~resolute
-#   - docker-ce-cli=5:29.7.1-1~ubuntu.26.04~resolute
-#   - containerd.io=2.2.6-1~ubuntu.26.04~resolute
-#   - docker-compose-plugin=5.3.1-1~ubuntu.26.04~resolute
+# Layer 2: ansible roles applied post-boot (ansible-playbook ansible/site.yaml).
+# Underscore names, one directory each under ansible/roles/; a typo fails at
+# plan time. Changing this list never diffs or recreates the VM. Version pins
+# live in each role's defaults/main.yaml (docker's packages are pinned there
+# because an archive_snapshot cannot cover download.docker.com). The bun role
+# needs 'unzip' in the packages list above.
+#   ansible_roles: [nats_server, bun, claude, docker]
 
 tags: ["ubuntu"]

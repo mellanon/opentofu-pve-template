@@ -1,0 +1,63 @@
+# Docker Engine from download.docker.com, pinned versions. The one role that
+# needs become: system packages and /etc config are inherently root's.
+
+- name: Install and configure docker
+  become: true
+  block:
+    - name: Ensure /etc/apt/keyrings exists
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Download Docker's signing key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: "0644"
+
+    - name: Read the key's fingerprint
+      ansible.builtin.command: gpg --show-keys --with-colons /etc/apt/keyrings/docker.asc
+      register: docker_key_probe
+      changed_when: false
+
+    - name: Check the key matches the pinned fingerprint
+      ansible.builtin.assert:
+        that:
+          - docker_gpg_fingerprint in docker_key_probe.stdout
+        fail_msg: >-
+          /etc/apt/keyrings/docker.asc does not carry the pinned fingerprint
+          {{ docker_gpg_fingerprint }} - refusing to trust the repository.
+
+    # Written directly rather than via deb822_repository: identical bytes,
+    # and no python3-debian dependency on the guest.
+    - name: Configure the docker apt repository (deb822)
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/docker.sources
+        mode: "0644"
+        content: |
+          Types: deb
+          URIs: https://download.docker.com/linux/ubuntu
+          Suites: {{ ansible_distribution_release }}
+          Components: stable
+          Architectures: amd64
+          Signed-By: /etc/apt/keyrings/docker.asc
+
+    - name: Install pinned docker packages
+      ansible.builtin.apt:
+        name: "{{ docker_packages }}"
+        state: present
+        update_cache: true
+
+    - name: Configure the docker daemon
+      ansible.builtin.copy:
+        src: daemon.json
+        dest: /etc/docker/daemon.json
+        mode: "0644"
+      notify: Restart docker
+
+    - name: Add the login user to the docker group
+      ansible.builtin.user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: true
