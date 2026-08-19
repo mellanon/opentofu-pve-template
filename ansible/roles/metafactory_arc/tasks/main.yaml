@@ -6,18 +6,18 @@
 - name: Probe for bun (cross-role dependency)
   ansible.builtin.stat:
     path: "{{ ansible_user_dir }}/.bun/bin/bun"
-  register: arc_bun
+  register: metafactory_arc_bun
 
 - name: Refuse to continue without bun
   ansible.builtin.fail:
     msg: >-
       The metafactory_arc role needs bun; list 'bun' before 'metafactory_arc'
       in the VM spec's ansible_roles.
-  when: not arc_bun.stat.exists
+  when: not metafactory_arc_bun.stat.exists
 
 - name: Probe for git (layer-1 dependency)  # noqa: command-instead-of-module
   ansible.builtin.command: git --version
-  register: arc_git_probe
+  register: metafactory_arc_git_probe
   changed_when: false
   failed_when: false
 
@@ -26,7 +26,7 @@
     msg: >-
       The metafactory_arc role needs git on the guest; add 'git' to the VM
       spec's packages list (layer 1) and reprovision, or install it by hand.
-  when: arc_git_probe.rc != 0
+  when: metafactory_arc_git_probe.rc != 0
 
 - name: Clone arc at the pinned tag
   ansible.builtin.git:
@@ -34,15 +34,15 @@
     dest: "{{ ansible_user_dir }}/arc"
     version: "v{{ metafactory_arc_version }}"
     depth: 1
-  register: arc_repo
+  register: metafactory_arc_repo
 
 - name: Probe the arc link
   ansible.builtin.stat:
     path: "{{ ansible_user_dir }}/.bun/bin/arc"
-  register: arc_link
+  register: metafactory_arc_link
 
 - name: Install dependencies and link arc
-  when: arc_repo is changed or not arc_link.stat.exists
+  when: metafactory_arc_repo is changed or not metafactory_arc_link.stat.exists
   environment:
     PATH: "{{ ansible_user_dir }}/.bun/bin:{{ ansible_env.PATH }}"
   block:

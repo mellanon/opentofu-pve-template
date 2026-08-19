@@ -1,0 +1,33 @@
+name: otel-lgtm
+
+services:
+  lgtm:
+    image: grafana/otel-lgtm:0.29.2
+    container_name: lgtm
+    restart: unless-stopped
+    ports:
+      - "3000:3000" # Grafana
+      - "4318:4318" # OTLP HTTP/protobuf
+      - "127.0.0.1:3200:3200" # Tempo, host-local only
+    environment:
+      GF_PLUGINS_PREINSTALL_SYNC: timurdigital-claudestats-app
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:?set GF_SECURITY_ADMIN_PASSWORD in .env}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      TEMPO_EXTRA_ARGS: --query-frontend.mcp-server.enabled=true
+    volumes:
+      - lgtm_data:/data
+      - ./conf/grafana/plugins/claudestats.yaml:/otel-lgtm/grafana/conf/provisioning/plugins/claudestats.yaml:ro
+      - ./conf/grafana/custom.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/custom.yaml:ro
+      - ./conf/grafana/dashboards:/otel-lgtm/grafana/conf/provisioning/dashboards/custom:ro
+      - ./conf/tempo-config.yaml:/otel-lgtm/tempo-config.yaml:ro
+      - ./conf/loki-config.yaml:/otel-lgtm/loki-config.yaml:ro
+      - ./conf/prometheus.yaml:/otel-lgtm/prometheus.yaml:ro
+    deploy:
+      resources:
+        limits:
+          cpus: "3.0" # max 3 of 4 VM CPU cores
+          memory: 6G # max 6 of 16 GiB VM memory
+
+volumes:
+  lgtm_data:
+    name: otel_lgtm_data

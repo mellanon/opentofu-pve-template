@@ -8,6 +8,11 @@ docker_packages:
   - docker-ce-cli=5:29.7.1-1~ubuntu.26.04~resolute
   - containerd.io=2.2.6-1~ubuntu.26.04~resolute
   - docker-compose-plugin=5.3.1-1~ubuntu.26.04~resolute
+  # These two are dependencies of docker-ce; left off this list they install
+  # unpinned at whatever version the repo serves that day, which breaks
+  # rebuild determinism the moment upstream publishes a new build.
+  - docker-buildx-plugin=0.36.1-1~ubuntu.26.04~resolute
+  - docker-ce-rootless-extras=5:29.7.2-1~ubuntu.26.04~resolute
 
 # Docker's signing key, pinned by full fingerprint: a bare signed-by URL
 # would trust whatever download.docker.com serves.

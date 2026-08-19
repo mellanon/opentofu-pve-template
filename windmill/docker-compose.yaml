@@ -1,0 +1,156 @@
+name: windmill
+
+services:
+  db:
+    image: postgres:16
+    shm_size: 1g
+    restart: unless-stopped
+    deploy:
+      # Set to 0 only when DATABASE_URL targets an external database.
+      replicas: 1
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    expose:
+      - "5432"
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWD:?set POSTGRES_PASSWD in .env}
+      POSTGRES_DB: windmill
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d windmill"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  windmill_server:
+    image: ${WM_IMAGE:?set WM_IMAGE to a pinned tag in .env}
+    pull_policy: always
+    deploy:
+      replicas: 1
+    restart: unless-stopped
+    expose:
+      - "8000"
+      - "2525"
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env}
+      MODE: server
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - worker_logs:/tmp/windmill/logs
+
+  windmill_worker:
+    image: ${WM_IMAGE:?set WM_IMAGE to a pinned tag in .env}
+    pull_policy: always
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 2048M
+    restart: unless-stopped
+    privileged: true
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env}
+      MODE: worker
+      WORKER_GROUP: default
+      FAVOR_UNSHARE_PID: "true"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - worker_dependency_cache:/tmp/windmill/cache
+      - worker_logs:/tmp/windmill/logs
+      # Legacy full-compat Docker is trusted-user-only. Do not mount the host
+      # socket unless a specific workflow requires host-level Docker access.
+      # - /var/run/docker.sock:/var/run/docker.sock
+
+  # Native jobs run in-process and are lighter than regular jobs.
+  windmill_worker_native:
+    image: ${WM_IMAGE:?set WM_IMAGE to a pinned tag in .env}
+    pull_policy: always
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 2048M
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env}
+      MODE: worker
+      WORKER_GROUP: native
+      NATIVE_MODE: "true"
+      SLEEP_QUEUE: "200"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - worker_logs:/tmp/windmill/logs
+
+  # The indexer powers full-text job and log search, an EE feature.
+  windmill_indexer:
+    image: ${WM_IMAGE:?set WM_IMAGE to a pinned tag in .env}
+    pull_policy: always
+    deploy:
+      replicas: 0
+    restart: unless-stopped
+    expose:
+      - "8002"
+    environment:
+      PORT: "8002"
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env}
+      MODE: indexer
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - windmill_index:/tmp/windmill/search
+      - worker_logs:/tmp/windmill/logs
+
+  # Combined LSP, Multiplayer, and Debugger services.
+  windmill_extra:
+    image: ${WM_EXTRA_IMAGE:?set WM_EXTRA_IMAGE to a pinned tag in .env}
+    pull_policy: always
+    restart: unless-stopped
+    expose:
+      - "3001"
+      - "3002"
+      - "3003"
+    environment:
+      ENABLE_LSP: "true"
+      ENABLE_MULTIPLAYER: "false"
+      ENABLE_DEBUGGER: "true"
+      DEBUGGER_PORT: "3003"
+      ENABLE_NSJAIL: "false"
+      REQUIRE_SIGNED_DEBUG_REQUESTS: "true"
+      WINDMILL_BASE_URL: http://windmill_server:8000
+    volumes:
+      - lsp_cache:/pyls/.cache
+
+  caddy:
+    # Keep this image and Caddyfile version-compatible when upgrading.
+    image: ghcr.io/windmill-labs/caddy-l4:2.11.4-1
+    restart: unless-stopped
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    ports:
+      - "80:80"
+      # Publish "25:25" only when inbound SMTP is intentionally enabled.
+      # Publish "443:443" when Caddy is configured for HTTPS.
+    environment:
+      BASE_URL: ":80"
+
+volumes:
+  db_data:
+    name: windmill_db_data
+  worker_dependency_cache:
+    name: windmill_worker_dependency_cache
+  worker_logs:
+    name: windmill_worker_logs
+  windmill_index:
+    name: windmill_index
+  lsp_cache:
+    name: windmill_lsp_cache
+  caddy_data:
+    name: windmill_caddy_data

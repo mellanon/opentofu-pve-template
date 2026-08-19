@@ -17,3 +17,11 @@ keys.txt
 secrets.json
 /logs/**
 !/logs/.gitkeep
+# Live container env files; commit only the .env.example templates.
+.env
+# otel-lgtm: reference/ is a scratch clone of the upstream otel-lgtm repo for
+# research into the container's internals; tmp/ is scratch space.
+/otel-lgtm/reference/
+/otel-lgtm/tmp/
+# Windmill
+/windmill/local-dev/node_modules/

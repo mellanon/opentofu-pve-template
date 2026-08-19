@@ -1,0 +1,253 @@
+{
+  "title": "Claude Code — Security & Tool Activity",
+  "uid": "claude-code-security",
+  "tags": ["claude-code", "security", "tools"],
+  "schemaVersion": 39,
+  "version": 2,
+  "refresh": "30s",
+  "time": { "from": "now-24h", "to": "now" },
+  "timepicker": {},
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Tool Calls (range)",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "sum(count_over_time({service_name=\"claude-code\"} | event_name=\"tool_result\" [$__range]))",
+          "refId": "A",
+          "queryType": "instant"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Rejected / Aborted Decisions",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "sum(count_over_time({service_name=\"claude-code\"} | event_name=\"tool_decision\" | decision!=\"accept\" [$__range]))",
+          "refId": "A",
+          "queryType": "instant"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short", "decimals": 0,
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 1 }, { "color": "red", "value": 10 }] }
+        }, "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Bash Invocations",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "sum(count_over_time({service_name=\"claude-code\"} | event_name=\"tool_result\" | tool_name=\"Bash\" [$__range]))",
+          "refId": "A",
+          "queryType": "instant"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Failed Tool Calls",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "sum(count_over_time({service_name=\"claude-code\"} | event_name=\"tool_result\" | success=\"false\" [$__range]))",
+          "refId": "A",
+          "queryType": "instant"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short", "decimals": 0,
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 1 }, { "color": "red", "value": 5 }] }
+        }, "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" }
+    },
+
+    {
+      "id": 10,
+      "type": "barchart",
+      "title": "Tool Usage by Name (range)",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "sum by (tool_name) (count_over_time({service_name=\"claude-code\"} | event_name=\"tool_result\" [$__range]))",
+          "legendFormat": "{{tool_name}}",
+          "refId": "A",
+          "queryType": "instant"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "orientation": "horizontal", "legend": { "showLegend": false }, "xTickLabelRotation": 0, "barWidth": 0.8 }
+    },
+    {
+      "id": 11,
+      "type": "piechart",
+      "title": "Decision Outcomes (range)",
+      "gridPos": { "h": 9, "w": 6, "x": 12, "y": 4 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "sum by (decision) (count_over_time({service_name=\"claude-code\"} | event_name=\"tool_decision\" [$__range]))",
+          "legendFormat": "{{decision}}",
+          "refId": "A",
+          "queryType": "instant"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "right", "values": ["value", "percent"] }, "pieType": "donut" }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Tool Calls Over Time (calls/min)",
+      "gridPos": { "h": 9, "w": 6, "x": 18, "y": 4 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "sum by (tool_name) (rate({service_name=\"claude-code\"} | event_name=\"tool_result\" [5m])) * 60",
+          "legendFormat": "{{tool_name}}",
+          "refId": "A",
+          "queryType": "range"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "fillOpacity": 20, "stacking": { "mode": "normal" } } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Tool Duration p95 by Tool (ms)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 13 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "quantile_over_time(0.95, {service_name=\"claude-code\"} | event_name=\"tool_result\" | unwrap duration_ms [5m]) by (tool_name)",
+          "legendFormat": "{{tool_name}}",
+          "refId": "A",
+          "queryType": "range"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } }
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Reject/Abort Rate (% of decisions)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 13 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "100 * sum(rate({service_name=\"claude-code\"} | event_name=\"tool_decision\" | decision!=\"accept\" [5m])) / sum(rate({service_name=\"claude-code\"} | event_name=\"tool_decision\" [5m]))",
+          "legendFormat": "% rejected/aborted",
+          "refId": "A",
+          "queryType": "range"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+
+    {
+      "id": 30,
+      "type": "logs",
+      "title": "Recent User Prompts",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 21 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "{service_name=\"claude-code\"} | event_name=\"user_prompt\" | line_format \"{{.prompt}}\"",
+          "refId": "A",
+          "queryType": "range"
+        }
+      ],
+      "options": { "showTime": true, "showLabels": false, "showCommonLabels": false, "wrapLogMessage": true, "dedupStrategy": "none", "enableLogDetails": true, "sortOrder": "Descending" }
+    },
+    {
+      "id": 31,
+      "type": "logs",
+      "title": "Bash Invocations (with command)",
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 31 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "{service_name=\"claude-code\"} | event_name=\"tool_result\" | tool_name=\"Bash\" | line_format \"[{{.decision_source}}] {{.tool_input}}\"",
+          "refId": "A",
+          "queryType": "range"
+        }
+      ],
+      "options": { "showTime": true, "showLabels": false, "showCommonLabels": false, "wrapLogMessage": true, "dedupStrategy": "none", "enableLogDetails": true, "sortOrder": "Descending" }
+    },
+    {
+      "id": 32,
+      "type": "logs",
+      "title": "File Modifications (Edit / Write / NotebookEdit)",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 43 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "{service_name=\"claude-code\"} | event_name=\"tool_result\" | tool_name=~\"Edit|Write|NotebookEdit\" | line_format \"{{.tool_name}} → {{.tool_input}}\"",
+          "refId": "A",
+          "queryType": "range"
+        }
+      ],
+      "options": { "showTime": true, "showLabels": false, "showCommonLabels": false, "wrapLogMessage": true, "dedupStrategy": "none", "enableLogDetails": true, "sortOrder": "Descending" }
+    },
+    {
+      "id": 33,
+      "type": "logs",
+      "title": "External Fetches (WebFetch / WebSearch)",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 53 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "{service_name=\"claude-code\"} | event_name=\"tool_result\" | tool_name=~\"WebFetch|WebSearch\" | line_format \"{{.tool_name}} → {{.tool_input}}\"",
+          "refId": "A",
+          "queryType": "range"
+        }
+      ],
+      "options": { "showTime": true, "showLabels": false, "showCommonLabels": false, "wrapLogMessage": true, "dedupStrategy": "none", "enableLogDetails": true, "sortOrder": "Descending" }
+    },
+    {
+      "id": 34,
+      "type": "logs",
+      "title": "Failed Tool Calls",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 63 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "{service_name=\"claude-code\"} | event_name=\"tool_result\" | success=\"false\" | line_format \"{{.tool_name}} FAILED: {{.tool_input}}\"",
+          "refId": "A",
+          "queryType": "range"
+        }
+      ],
+      "options": { "showTime": true, "showLabels": false, "showCommonLabels": false, "wrapLogMessage": true, "dedupStrategy": "none", "enableLogDetails": true, "sortOrder": "Descending" }
+    }
+  ]
+}

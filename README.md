@@ -64,9 +64,19 @@ lifecycle.
 │   └── roles/<role>/              # nats_server, bun, claude, docker,
 │                                  # metafactory_arc
 ├── inventory/             # one YAML file per VM                       [EDIT]
-└── scripts/               # check-cloud-init.sh, check-ansible.sh,
-                           # vm-fingerprint.sh
+├── scripts/               # check-cloud-init.sh, check-ansible.sh,
+│                          # vm-fingerprint.sh
+├── otel-lgtm/             # grafana/otel-lgtm observability stack      [EDIT]
+│                          # (docker compose; see its README.md)
+└── windmill/              # Windmill workflow engine (docker compose;  [EDIT]
+                           # see its README.md; local-dev/ is the wmill
+                           # CLI workspace)
 ```
+
+The two container directories are deployments that run *on* a provisioned VM
+(via the `docker` ansible role), not part of the OpenTofu layer. Copy each
+`.env.example` to `.env` and fill it in on the target host; the live `.env`
+files are gitignored.
 
 ## Prerequisites
 
