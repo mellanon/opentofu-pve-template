@@ -1,3 +1,5 @@
 # Pinned fleet-wide; installed from the tagged release of the git repo, so
-# the tag is the verification (there is no separate checksum to pin).
-metafactory_arc_version: "0.44.3"
+# the tag is the verification for arc's own source. From 0.45.0 arc tracks
+# its bun.lock, so its dependency tree is pinned too and the role installs
+# with --frozen-lockfile.
+metafactory_arc_version: "0.45.0"
