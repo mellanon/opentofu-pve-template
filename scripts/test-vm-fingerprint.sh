@@ -114,6 +114,45 @@ else
   printf 'ok      %s\n' "a capture with no markers is refused, not digested as empty"
 fi
 
+# The software under test must not be inside the environment digest. arc
+# installs packages into ~/.local/share/metafactory/arc/repos, so without a
+# prune the layer2 file hash folds the target-s git SHA into the environment,
+# and "same environment, two target versions" stops being expressible.
+#
+# Two checks, because neither alone is enough: the first proves the prune is
+# still written into both find passes, the second proves the expression does
+# what it claims on a real tree. The expression is duplicated from the remote
+# script - if you change it there, change it here.
+prunes="$(grep -c -- '-path "\$d/share/metafactory" -prune' "$fingerprint" || true)"
+check   "both layer2 find passes prune the metafactory data dir" \
+        "2" "$prunes"
+
+tree="$work/home"
+mkdir -p "$tree/.local/bin" "$tree/.local/state" \
+         "$tree/.local/share/metafactory/arc/repos/cortex" \
+         "$tree/.bun/install/cache"
+: >"$tree/.local/bin/nats-server"
+: >"$tree/.local/state/claude.lock"
+: >"$tree/.local/share/metafactory/arc/repos/cortex/index.ts"
+: >"$tree/.bun/install/cache/pkg.npm"
+: >"$tree/.bun/install/cache/extracted.js"
+
+listing="$(
+  cd "$tree" || exit 1
+  for d in .local .bun; do
+    [ -d "$d" ] || continue
+    find "$d" -path "$d/state" -prune -o -path "$d/share/metafactory" -prune -o ! -path "$d/install/cache/*.npm" -print
+  done | sort
+)"
+
+seen() { printf '%s\n' "$listing" | grep -q "$1" && echo yes || echo no; }
+check   "the software under test is excluded from the layer2 listing" \
+        "no"  "$(seen 'share/metafactory')"
+check   ".local/state is still excluded"      "no"  "$(seen 'state/claude.lock')"
+check   "compressed .npm blobs are still excluded" "no"  "$(seen 'pkg.npm')"
+check   "extracted cache trees are still covered"  "yes" "$(seen 'extracted.js')"
+check   "layer-2 tooling is still covered"         "yes" "$(seen 'bin/nats-server')"
+
 echo
 if [ "$failures" -eq 0 ]; then
   echo "all checks passed"

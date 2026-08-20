@@ -12,6 +12,7 @@
 #             definition: package set and versions, apt pinning, enabled
 #             units, login user, layer-2 file trees. Two VMs built from the
 #             same definition on DIFFERENT providers should agree here.
+#             Excludes the software under test - see layer2 files.
 #   PROVIDER  where honest differences live on the record: kernel flavour,
 #             apt mirror URIs, cloud-init datasource, base image identity.
 #             Expected to differ between providers; must NOT differ between
@@ -120,13 +121,27 @@ section "layer2 files"
 # global/node_modules symlinks into and are covered. Scoped deliberately:
 # hashing the whole home is non-idempotent by design (.claude.json,
 # timestamped backups, caches).
+#
+# .local/share/metafactory is pruned too, and for a different reason than the
+# rest: it is not noise, it is the software under test. arc installs packages
+# into .local/share/metafactory/arc/repos, so hashing it would fold the
+# targets git SHA into the environment digest - and an environment whose
+# identity moves every time the thing being tested moves cannot answer the
+# question the digest exists for, which is "were these two runs performed
+# under the same conditions?". Same environment, two target versions is the
+# comparison the whole exercise is built on, so the target is recorded in the
+# run receipt instead, as name plus resolved ref.
+#
+# arc ITSELF stays in the fingerprint (see layer2 versions below): it lives in
+# ~/arc, it decides how targets get installed, and it does not vary with which
+# target is under test. Tooling is environment; the target is not.
 for d in .local .bun; do
   [ -d "$d" ] || continue
-  find "$d" -path "$d/state" -prune -o ! -path "$d/install/cache/*.npm" -print
+  find "$d" -path "$d/state" -prune -o -path "$d/share/metafactory" -prune -o ! -path "$d/install/cache/*.npm" -print
 done | sort
 for d in .local .bun; do
   [ -d "$d" ] || continue
-  find "$d" -path "$d/state" -prune -o -type f ! -path "$d/install/cache/*.npm" -print0 | xargs -0 -r sha256sum
+  find "$d" -path "$d/state" -prune -o -path "$d/share/metafactory" -prune -o -type f ! -path "$d/install/cache/*.npm" -print0 | xargs -0 -r sha256sum
 done | sort -k2
 
 section "layer2 versions"
