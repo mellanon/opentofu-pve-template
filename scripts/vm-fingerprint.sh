@@ -1,16 +1,36 @@
 #!/usr/bin/env bash
-# Capture the determinism fingerprint of a VM over SSH.
+# Capture the determinism fingerprint of a VM over SSH, and digest it.
 #
 # Records everything the environment contract pins - package set and versions,
 # apt configuration, enabled units, login user, kernel - and deliberately
 # excludes what is per-instance by design: SSH host keys, machine-id,
 # filesystem UUIDs, MAC addresses, cloud-init instance-id, logs, timestamps.
 #
+# The capture is split into two parts, digested separately:
+#
+#   CORE      what any provider must reproduce identically for the same VM
+#             definition: package set and versions, apt pinning, enabled
+#             units, login user, layer-2 file trees. Two VMs built from the
+#             same definition on DIFFERENT providers should agree here.
+#   PROVIDER  where honest differences live on the record: kernel flavour,
+#             apt mirror URIs, cloud-init datasource, base image identity.
+#             Expected to differ between providers; must NOT differ between
+#             two rebuilds on the same provider.
+#
+# Both digests, plus a combined one over the whole body, are appended to the
+# capture so they are committed and diffed along with it.
+#
 # Workflow: capture to a tracked file, commit, destroy + reprovision, capture
 # again to the same path - `git diff` empty means the rebuilt VM has the same
-# environment.
+# environment, and the digests say so in one line each.
 #
 #   ./scripts/vm-fingerprint.sh ubuntu@10.0.0.50 fingerprints/ubuntu-test.txt
+#
+# A capture can also be re-digested without touching a VM, which is how the
+# comparator is tested and how existing captures are re-digested if the
+# core/provider split is ever re-cut:
+#
+#   ./scripts/vm-fingerprint.sh --from-file fingerprints/ubuntu-test.txt
 #
 # Host keys are instance noise here, so known-hosts checking is disabled for
 # this script only (a rebuilt VM would otherwise hard-fail the connection).
@@ -18,23 +38,46 @@
 
 set -euo pipefail
 
-host="${1:?usage: vm-fingerprint.sh <user@host> [outfile]}"
-outfile="${2:-}"
+usage="usage: vm-fingerprint.sh <user@host> [outfile]
+       vm-fingerprint.sh --from-file <capture> [outfile]"
 
+from_file=""
+if [ "${1:-}" = "--from-file" ]; then
+  from_file="${2:?$usage}"
+  [ -r "$from_file" ] || { echo "not readable: $from_file" >&2; exit 2; }
+  shift 2
+  host=""
+else
+  host="${1:?$usage}"
+  shift
+fi
+outfile="${1:-}"
+
+# Re-reading a file that already carries a DIGESTS section drops it, along with
+# the blank line separating it from the body, so that re-digesting an already
+# digested capture reproduces the same three digests instead of folding that
+# blank line into the provider section.
 capture() {
+  if [ -n "$from_file" ]; then
+    awk '
+      /^##### DIGESTS #####$/ { exit }
+      /^$/                    { blanks++; next }
+      { for (; blanks > 0; blanks--) print ""; print }
+    ' "$from_file"
+    return
+  fi
   ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
       -o LogLevel=ERROR "$host" '
 set -eu
 section() { printf "\n===== %s =====\n" "$1"; }
 
+printf "##### CORE #####\n"
+
 section "os-release"
 grep -E "^(PRETTY_NAME|VERSION_ID)=" /etc/os-release
 
-section "kernel"
-uname -r
-
 section "hostname"
-hostname; hostname -f 2>/dev/null || true
+hostname
 
 section "timezone"
 readlink /etc/localtime
@@ -47,8 +90,13 @@ for f in /etc/apt/apt.conf.d/50cloudinit-snapshot /etc/apt/apt.conf.d/51cloudini
   [ -e "$f" ] && { echo "--- $f"; cat "$f"; }
 done
 
-section "apt sources"
-grep -rhE "^(Types|URIs|Suites|Components|Snapshot):" /etc/apt/sources.list.d/*.sources 2>/dev/null | sort || true
+# The pin, without the mirror. Snapshot: is the determinism claim and belongs
+# to core; URIs: is where the archive happens to be served from and moves with
+# the provider (regional mirrors in cloud images), so it sits in PROVIDER. A
+# provider that quietly drops the snapshot pin therefore breaks the CORE
+# digest, loudly, instead of hiding behind a mirror difference.
+section "apt pinning"
+grep -rhE "^(Types|Suites|Components|Snapshot):" /etc/apt/sources.list.d/*.sources 2>/dev/null | sort || true
 
 section "enabled units"
 systemctl list-unit-files --state=enabled --no-legend --no-pager | awk "{print \$1}" | sort
@@ -97,15 +145,83 @@ section "layer2 versions"
 section "docker daemon"
 [ -e /etc/docker/daemon.json ] && { echo "--- /etc/docker/daemon.json"; cat /etc/docker/daemon.json; }
 
+printf "\n##### PROVIDER #####\n"
+
+section "kernel"
+uname -r
+
+section "fqdn"
+hostname -f 2>/dev/null || true
+
+section "apt mirror"
+grep -rhE "^URIs:" /etc/apt/sources.list.d/*.sources 2>/dev/null | sort || true
+
+section "base image"
+# Ubuntu cloud images record what they were built from; this is the closest
+# thing to image identity visible from inside the guest, and it is what the
+# datastore file path (proxmox) or the AMI id (ec2) resolves to.
+[ -e /etc/cloud/build.info ] && cat /etc/cloud/build.info
+
 section "cloud-init"
 cloud-init status
+cloud-init query -f "{{ v1.datasource }}" 2>/dev/null || true
 '
 }
 
+# sha256sum on linux, shasum on macos - the operator machine, not the guest.
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum <"$1" | awk '{print $1}'
+  else
+    shasum -a 256 <"$1" | awk '{print $1}'
+  fi
+}
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+capture >"$work/body"
+
+# Split on the part markers. The markers themselves are not digested, so the
+# digest is over content only and stays stable if the marker text is ever
+# reworded.
+awk -v core="$work/core" -v prov="$work/provider" '
+  /^##### CORE #####$/     { out = core; next }
+  /^##### PROVIDER #####$/ { out = prov; next }
+  out                      { printf "%s\n", $0 > out }
+' "$work/body"
+
+: >>"$work/core"
+: >>"$work/provider"
+
+# An empty section still digests - to the well-known sha256 of the empty
+# string - and would sail through a comparison looking like a match. Refuse
+# instead: an empty half means the markers did not arrive (a capture from
+# before the split, or a remote script that died early), not that the VM has
+# no packages.
+for part in core provider; do
+  if [ ! -s "$work/$part" ]; then
+    echo "refusing to digest: the $part section is empty." >&2
+    echo "the capture is missing its ##### markers - pre-split file, or a truncated capture." >&2
+    exit 3
+  fi
+done
+
+cat "$work/core" "$work/provider" >"$work/combined"
+
+{
+  cat "$work/body"
+  printf '\n##### DIGESTS #####\n'
+  printf 'core      sha256:%s\n' "$(sha256_of "$work/core")"
+  printf 'provider  sha256:%s\n' "$(sha256_of "$work/provider")"
+  printf 'combined  sha256:%s\n' "$(sha256_of "$work/combined")"
+} >"$work/out"
+
 if [ -n "$outfile" ]; then
   mkdir -p "$(dirname "$outfile")"
-  capture >"$outfile"
+  cp "$work/out" "$outfile"
   echo "fingerprint written to $outfile" >&2
+  tail -4 "$outfile" >&2
 else
-  capture
+  cat "$work/out"
 fi
