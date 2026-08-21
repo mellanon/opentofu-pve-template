@@ -47,7 +47,7 @@ Suites: noble
 6.8.0-45-generic
 
 ===== apt mirror =====
-URIs: http://nz.archive.ubuntu.com/ubuntu/
+URIs: http://archive.ubuntu.com/ubuntu/
 FIXTURE
 
 sed 's/1\.2\.0/1.2.1/'                     "$work/base.txt" >"$work/pkg.txt"
@@ -123,6 +123,9 @@ fi
 # still written into both find passes, the second proves the expression does
 # what it claims on a real tree. The expression is duplicated from the remote
 # script - if you change it there, change it here.
+# SC2016 is the point: this greps for the literal string $d as it appears in
+# the script, not for the value of a variable.
+# shellcheck disable=SC2016
 prunes="$(grep -c -- '-path "\$d/share/metafactory" -prune' "$fingerprint" || true)"
 check   "both layer2 find passes prune the metafactory data dir" \
         "2" "$prunes"
