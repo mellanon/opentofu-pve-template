@@ -48,7 +48,7 @@
   block:
     - name: Install production dependencies
       ansible.builtin.command:
-        cmd: bun install --production
+        cmd: bun install --production --frozen-lockfile
         chdir: "{{ ansible_user_dir }}/arc"
       changed_when: true
 
