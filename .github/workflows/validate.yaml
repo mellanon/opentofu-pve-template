@@ -1,0 +1,52 @@
+name: validate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Read-only rendering only: satisfies the state-encryption config and
+      # its >=16-char validation. No state is created or read in CI.
+      TF_VAR_state_passphrase: ci-dummy-passphrase-render-only
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          # The wrapper buffers tofu's stdio to capture outputs, which breaks
+          # the `printf ... | tofu console` pipe inside check-cloud-init.sh
+          # (the pipe hangs). We don't consume outputs, so run tofu directly.
+          tofu_wrapper: false
+
+      - name: Install validation dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cloud-init python3-yaml
+          # pipx, not pip --user: a --user-site jsonschema shadows the system
+          # one and crashes the runner's cloud-init (`schema` hits a
+          # registry= kwarg mismatch). pipx keeps ansible's deps in their own
+          # venvs; ansible-lint pulls ansible-core into its venv itself.
+          pipx install ansible-core
+          pipx install ansible-lint
+
+      - name: tofu init and validate
+        run: |
+          tofu init -input=false
+          tofu validate
+
+      - name: check-cloud-init
+        run: ./scripts/check-cloud-init.sh
+
+      # check-ansible.sh needs an applied tofu state (it inspects the live
+      # dynamic inventory), so CI runs only its state-independent parts.
+      - name: ansible syntax check
+        run: ansible-playbook ansible/site.yaml --syntax-check -i localhost,
+
+      - name: ansible-lint
+        working-directory: ansible
+        run: ansible-lint
