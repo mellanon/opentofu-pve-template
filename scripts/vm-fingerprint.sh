@@ -179,7 +179,29 @@ section "base image"
 
 section "cloud-init"
 cloud-init status
-cloud-init query -f "{{ v1.datasource }}" 2>/dev/null || true
+# v1.platform is the datasource discriminator: nocloud on the proxmox path,
+# ec2 on the aws one. Verified against a real VM rather than guessed - the
+# first version of this line asked for v1.datasource, which is not a key.
+#
+# Guarded because of HOW that failed. cloud-init does not error on an unknown
+# key: it warns on stderr and prints CI_MISSING_JINJA_VAR/<name> to stdout,
+# exit 0. That sentinel would have digested perfectly cleanly, every time,
+# recording a placeholder where the datasource belongs - a healthy trace over
+# stale input, in the one file whose job is to catch exactly that. So an
+# unusable answer stops the capture instead of being written into it.
+if command -v cloud-init >/dev/null 2>&1; then
+  ci_platform=$(cloud-init query -f "{{ v1.platform }}" 2>/dev/null || true)
+  case "$ci_platform" in
+    "" | CI_MISSING_JINJA_VAR*)
+      echo "FATAL: cloud-init returned no usable v1.platform (got: $ci_platform)" >&2
+      echo "check the available keys with: cat /run/cloud-init/instance-data.json" >&2
+      exit 1
+      ;;
+  esac
+  echo "$ci_platform"
+else
+  echo "cloud-init: not installed"
+fi
 '
 }
 

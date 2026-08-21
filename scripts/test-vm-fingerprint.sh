@@ -153,6 +153,24 @@ check   "compressed .npm blobs are still excluded" "no"  "$(seen 'pkg.npm')"
 check   "extracted cache trees are still covered"  "yes" "$(seen 'extracted.js')"
 check   "layer-2 tooling is still covered"         "yes" "$(seen 'bin/nats-server')"
 
+# cloud-init does not error on an unknown key - it prints
+# CI_MISSING_JINJA_VAR/<name> to stdout and exits 0, which digests cleanly and
+# records a placeholder where a real value belongs. v1.datasource is not a key
+# and shipped here once; these are static checks because the alternative needs
+# a booted VM, and a grep that runs is worth more than an assertion that does
+# not.
+# Comment lines are stripped first: the comments in the fingerprint script
+# discuss both key names by name, and a check that counts its own explanation
+# is not a check.
+code_only() { grep -vE '^[[:space:]]*#' "$fingerprint"; }
+
+check   "the fingerprint asks cloud-init for v1.platform" \
+        "1" "$(code_only | grep -cF 'cloud-init query -f "{{ v1.platform }}"' || true)"
+check   "it never asks for v1.datasource, which is not a key" \
+        "0" "$(code_only | grep -c 'v1\.datasource' || true)"
+check   "a CI_MISSING_JINJA_VAR answer stops the capture" \
+        "1" "$(code_only | grep -c 'CI_MISSING_JINJA_VAR' || true)"
+
 echo
 if [ "$failures" -eq 0 ]; then
   echo "all checks passed"
