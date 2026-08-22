@@ -11,12 +11,12 @@
 
 - name: Probe installed claude version binary
   ansible.builtin.stat:
-    path: "{{ ansible_user_dir }}/.local/share/claude/versions/{{ claude_version }}"
+    path: "{{ ansible_facts['user_dir'] }}/.local/share/claude/versions/{{ claude_version }}"
   register: claude_version_bin
 
 - name: Probe ~/.local/bin/claude symlink
   ansible.builtin.stat:
-    path: "{{ ansible_user_dir }}/.local/bin/claude"
+    path: "{{ ansible_facts['user_dir'] }}/.local/bin/claude"
     follow: false
   register: claude_link
 

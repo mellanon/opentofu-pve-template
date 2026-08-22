@@ -5,7 +5,7 @@
 
 - name: Probe for bun (cross-role dependency)
   ansible.builtin.stat:
-    path: "{{ ansible_user_dir }}/.bun/bin/bun"
+    path: "{{ ansible_facts['user_dir'] }}/.bun/bin/bun"
   register: metafactory_arc_bun
 
 - name: Refuse to continue without bun
@@ -31,29 +31,29 @@
 - name: Clone arc at the pinned tag
   ansible.builtin.git:
     repo: https://github.com/the-metafactory/arc.git
-    dest: "{{ ansible_user_dir }}/arc"
+    dest: "{{ ansible_facts['user_dir'] }}/arc"
     version: "v{{ metafactory_arc_version }}"
     depth: 1
   register: metafactory_arc_repo
 
 - name: Probe the arc link
   ansible.builtin.stat:
-    path: "{{ ansible_user_dir }}/.bun/bin/arc"
+    path: "{{ ansible_facts['user_dir'] }}/.bun/bin/arc"
   register: metafactory_arc_link
 
 - name: Install dependencies and link arc
   when: metafactory_arc_repo is changed or not metafactory_arc_link.stat.exists
   environment:
-    PATH: "{{ ansible_user_dir }}/.bun/bin:{{ ansible_env.PATH }}"
+    PATH: "{{ ansible_facts['user_dir'] }}/.bun/bin:{{ ansible_facts['env']['PATH'] }}"
   block:
     - name: Install production dependencies
       ansible.builtin.command:
         cmd: bun install --production --frozen-lockfile
-        chdir: "{{ ansible_user_dir }}/arc"
+        chdir: "{{ ansible_facts['user_dir'] }}/arc"
       changed_when: true
 
     - name: Link arc into ~/.bun/bin
       ansible.builtin.command:
         cmd: bun link
-        chdir: "{{ ansible_user_dir }}/arc"
+        chdir: "{{ ansible_facts['user_dir'] }}/arc"
       changed_when: true

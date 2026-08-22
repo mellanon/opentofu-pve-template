@@ -2,7 +2,7 @@
 # No become anywhere: layer 2 tool installs are user-space by construction.
 
 - name: Probe installed nats-server version
-  ansible.builtin.command: "{{ ansible_user_dir }}/.local/bin/nats-server --version"
+  ansible.builtin.command: "{{ ansible_facts['user_dir'] }}/.local/bin/nats-server --version"
   register: nats_server_probe
   changed_when: false
   failed_when: false
@@ -20,7 +20,7 @@
 
     - name: Ensure ~/.local/bin exists
       ansible.builtin.file:
-        path: "{{ ansible_user_dir }}/.local/bin"
+        path: "{{ ansible_facts['user_dir'] }}/.local/bin"
         state: directory
         mode: "0755"
 
@@ -40,7 +40,7 @@
     - name: Install binary
       ansible.builtin.copy:
         src: "{{ nats_server_tmp.path }}/{{ nats_pkg }}/nats-server"
-        dest: "{{ ansible_user_dir }}/.local/bin/nats-server"
+        dest: "{{ ansible_facts['user_dir'] }}/.local/bin/nats-server"
         mode: "0755"
         remote_src: true
 
