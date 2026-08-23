@@ -181,6 +181,21 @@ files are gitignored.
   re-run ansible, capture again to the same path: an empty `git diff` is the
   proof, now spanning both layers.
 
+Short version of the command sequence to destroy, recreate, and validate the fingerprint assuming the inventory entry is for a VM called ubuntu-test at an IP of 10.1.1.5.
+
+```sh
+source tofu.env
+git mv inventory/ubuntu-test.yaml inventory/destroy/
+tofu apply
+git mv inventory/destroy/ubuntu-test.yaml inventory/
+tofu apply
+ansible-playbook ansible/site.yaml --limit ubuntu-test
+./scripts/vm-fingerprint.sh ubuntu@10.1.1.5 fingerprints/ubuntu-test.txt
+git diff fingerprints/ubuntu-test.txt
+```
+
+NOTE: The inventory/destroy directory name is intentional, so it is clear what the next "tofu apply" is expected to do.
+
 ## Layer 2: Ansible
 
 Cloud-init is decided at first boot and reachable only by recreating the VM —

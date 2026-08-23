@@ -1,3 +1,9 @@
+# local
+.claude/settings.local.json
+.venv/
+notes.md
+WORKFLOW.md
+# opentofu
 *.tfvars
 *.tfvars.json
 *.tfstate
@@ -10,18 +16,28 @@
 # traffic including the live API token - regardless of TF_LOG.
 crash.log
 crash.*.log
+# Live container env files; commit only the .env.example templates.
+.env
+# operator
+fingerprints/**
+!fingerprints/.gitkeep
+inventory/*.yaml
+!inventory/example.yaml
+# age/sops
 keys.txt
 *.agekey
 # Decrypted copies of secrets.enc.json (sops -d > ...).
 *.dec.json
 secrets.json
-/logs/**
-!/logs/.gitkeep
-# Live container env files; commit only the .env.example templates.
-.env
 # otel-lgtm: reference/ is a scratch clone of the upstream otel-lgtm repo for
-# research into the container's internals; tmp/ is scratch space.
+# research into the container's internals
 /otel-lgtm/reference/
-/otel-lgtm/tmp/
 # Windmill
 /windmill/local-dev/node_modules/
+# logs/private
+/logs/**
+!/logs/.gitkeep
+private/**
+!private/.gitkeep
+# scratch
+tmp/
