@@ -114,27 +114,50 @@ else
   printf 'ok      %s\n' "a capture with no markers is refused, not digested as empty"
 fi
 
-# The software under test must not be inside the environment digest. arc
-# installs packages into ~/.local/share/metafactory/arc/repos, so without a
-# prune the layer2 file hash folds the target-s git SHA into the environment,
-# and "same environment, two target versions" stops being expressible.
+# The software under test must not be inside the environment digest. It can
+# get in by two doors, and each needs its own prune:
 #
-# Two checks, because neither alone is enough: the first proves the prune is
-# still written into both find passes, the second proves the expression does
-# what it claims on a real tree. The expression is duplicated from the remote
-# script - if you change it there, change it here.
+#   arc installs packages into ~/.local/share/metafactory/arc/repos, so
+#   without a prune the layer2 file hash folds the target-s git SHA into the
+#   environment, and "same environment, two target versions" stops being
+#   expressible.
+#
+#   arc also writes a CLI shim per installed package into ~/.local/bin, as a
+#   regular 0755 file. So the first `arc install <target>` drops
+#   .local/bin/<target> into the same hash even when share/metafactory is
+#   pruned. The shim dir is therefore pruned wholesale - see the reasoning
+#   block above the find passes in the remote script for why wholesale and
+#   not arc-owned-only, and for what that costs.
+#
+# Two checks per prune, because neither alone is enough: the first proves the
+# prune is still written into both find passes, the second proves the
+# expression does what it claims on a real tree. The expression is duplicated
+# from the remote script - if you change it there, change it here.
 # SC2016 is the point: this greps for the literal string $d as it appears in
 # the script, not for the value of a variable.
 # shellcheck disable=SC2016
 prunes="$(grep -c -- '-path "\$d/share/metafactory" -prune' "$fingerprint" || true)"
 check   "both layer2 find passes prune the metafactory data dir" \
         "2" "$prunes"
+# shellcheck disable=SC2016
+bin_prunes="$(grep -c -- '-path "\$d/bin" -prune' "$fingerprint" || true)"
+check   "both layer2 find passes prune the shim dir" \
+        "2" "$bin_prunes"
 
 tree="$work/home"
 mkdir -p "$tree/.local/bin" "$tree/.local/state" \
          "$tree/.local/share/metafactory/arc/repos/cortex" \
          "$tree/.bun/install/cache"
 : >"$tree/.local/bin/nats-server"
+# What an arc CLI shim for an installed target actually looks like on disk:
+# a regular 0755 file, no arc header, no marker this script could match -
+# which is why the prune is by path and the whole dir goes.
+# SC2016 is the point again: this is a verbatim copy of what arc writes, not
+# something this script should expand.
+# shellcheck disable=SC2016
+printf '#!/bin/bash\nexport ARC_INVOCATION_CWD="${ARC_INVOCATION_CWD:-$(pwd)}"\ncd "/home/u/.local/share/metafactory/arc/repos/cortex" && exec bun run ./cli.ts "$@"\n' \
+  >"$tree/.local/bin/cortex"
+chmod 0755 "$tree/.local/bin/cortex"
 : >"$tree/.local/state/claude.lock"
 : >"$tree/.local/share/metafactory/arc/repos/cortex/index.ts"
 : >"$tree/.bun/install/cache/pkg.npm"
@@ -144,17 +167,35 @@ listing="$(
   cd "$tree" || exit 1
   for d in .local .bun; do
     [ -d "$d" ] || continue
-    find "$d" -path "$d/state" -prune -o -path "$d/share/metafactory" -prune -o ! -path "$d/install/cache/*.npm" -print
+    find "$d" -path "$d/state" -prune -o -path "$d/share/metafactory" -prune -o -path "$d/bin" -prune -o ! -path "$d/install/cache/*.npm" -print
   done | sort
 )"
 
 seen() { printf '%s\n' "$listing" | grep -q "$1" && echo yes || echo no; }
 check   "the software under test is excluded from the layer2 listing" \
         "no"  "$(seen 'share/metafactory')"
+check   "an arc shim for the software under test is excluded too" \
+        "no"  "$(seen 'bin/cortex')"
+check   "the shim dir is pruned wholesale, tooling shims included" \
+        "no"  "$(seen 'bin/nats-server')"
 check   ".local/state is still excluded"      "no"  "$(seen 'state/claude.lock')"
 check   "compressed .npm blobs are still excluded" "no"  "$(seen 'pkg.npm')"
 check   "extracted cache trees are still covered"  "yes" "$(seen 'extracted.js')"
-check   "layer-2 tooling is still covered"         "yes" "$(seen 'bin/nats-server')"
+
+# Pruning bin wholesale trades its hashes for the version section, so that
+# section is now the only place the layer-2 tooling identity survives. These
+# checks are what makes the trade honest: drop a tool from layer2 versions
+# after this and the suite goes red rather than the fingerprint going quiet.
+# Comments are stripped so the prose above those lines cannot satisfy them.
+versions="$(
+  sed -n '/^section "layer2 versions"$/,/^section "docker daemon"$/p' "$fingerprint" \
+    | grep -vE '^[[:space:]]*#'
+)"
+records() { printf '%s\n' "$versions" | grep -q "$1" && echo yes || echo no; }
+for tool in nats-server bun claude arc; do
+  check "layer2 versions still records $tool by version, not by hash" \
+        "yes" "$(records "$tool")"
+done
 
 # cloud-init does not error on an unknown key - it prints
 # CI_MISSING_JINJA_VAR/<name> to stdout and exits 0, which digests cleanly and

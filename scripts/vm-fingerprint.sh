@@ -114,34 +114,83 @@ for f in /etc/ssh/sshd_config.d/*.conf; do
 done
 
 section "layer2 files"
-# Where the ansible tool roles install (~/.local, ~/.bun), with .local/state
-# (claude lock files) and the compressed *.npm download blobs in
-# .bun/install/cache excluded - the blobs are not content-stable across
-# installs, unlike the extracted package trees next to them, which are what
-# global/node_modules symlinks into and are covered. Scoped deliberately:
-# hashing the whole home is non-idempotent by design (.claude.json,
+# RULE: this section hashes what the environment IS. A path under these trees
+# belongs in the hash only if it is (i) part of the environment rather than
+# part of the software under test, and (ii) content-stable across two
+# identical installs. Anything that fails either half is pruned, and anything
+# pruned that still carries a fact worth keeping is re-recorded by reference
+# in layer2 versions below - as a version string or a resolved ref, which does
+# not move when the target moves.
+#
+# The expression below is the current APPLICATION of that rule, not its
+# definition. This file has already been wrong twice by reading the list as
+# the specification and asking only "is this path enumerated?" when a new
+# directory turned up. Ask the rule instead: is this the environment, and is
+# it stable? If not, prune it and record here which half it failed.
+#
+# Scoped to ~/.local and ~/.bun deliberately - where the ansible tool roles
+# install. Hashing the whole home is non-idempotent by design (.claude.json,
 # timestamped backups, caches).
 #
-# .local/share/metafactory is pruned too, and for a different reason than the
-# rest: it is not noise, it is the software under test. arc installs packages
-# into .local/share/metafactory/arc/repos, so hashing it would fold the
-# targets git SHA into the environment digest - and an environment whose
-# identity moves every time the thing being tested moves cannot answer the
-# question the digest exists for, which is "were these two runs performed
-# under the same conditions?". Same environment, two target versions is the
-# comparison the whole exercise is built on, so the target is recorded in the
-# run receipt instead, as name plus resolved ref.
+# Fails (ii), not content-stable:
+#   $d/state               claude lock files.
+#   $d/install/cache/*.npm compressed download blobs, not byte-stable across
+#                          installs. The extracted package trees next to them
+#                          ARE stable, are what global/node_modules symlinks
+#                          into, and stay in.
+#
+# Fails (i), it is the software under test:
+#   $d/share/metafactory   arc installs packages into
+#                          .local/share/metafactory/arc/repos, so hashing it
+#                          folds the targets git SHA into the environment
+#                          digest - and an environment whose identity moves
+#                          every time the thing being tested moves cannot
+#                          answer the question the digest exists for, which is
+#                          "were these two runs performed under the same
+#                          conditions?". Same environment, two target versions
+#                          is the comparison the whole exercise is built on,
+#                          so the target is recorded in the run receipt
+#                          instead, as name plus resolved ref.
+#   $d/bin                 the same failure arriving by a second door. arc
+#                          writes a CLI shim into its shim dir (~/.local/bin
+#                          by default) for every package it installs, and as a
+#                          regular 0755 file, not a symlink. So the first arc
+#                          install of a target drops bin/<target> straight
+#                          into the hashed set: the targets name, plus a shim
+#                          body naming the targets install path. Pruning
+#                          share/metafactory alone does not stop that.
+#
+# Why bin is pruned WHOLESALE and not just the shims arc owns - crucible#14
+# option (a), chosen over option (b). Option (b) needs a marker this script
+# can match, and no such marker exists. arc createCliShim, via
+# buildShimContent in arc src/lib/symlinks.ts, writes a POSIX shim as
+# "#!/bin/bash" followed immediately by an ARC_INVOCATION_CWD export: no arc
+# header line, no marker comment, nothing arc has committed to keeping.
+# Matching that export line would mean reading file bodies to decide a prune,
+# and pinning this repo to an undeclared implementation detail of a repo on
+# the far side of the seam - one whose shim format has already changed at
+# least once. A prune that can silently stop pruning is worse than no prune.
+#
+# The cost of (a), stated plainly: bin/nats-server is a real binary here and
+# its hash leaves the digest along with it. That is accepted. Everything in
+# bin is a dispatcher - a shim body is an install path, a fact about where and
+# not about what - and the thing it dispatches to still lives under a tree
+# that IS hashed (the bun global node_modules, the extracted install cache).
+# The tooling identity bin used to carry is carried by layer2 versions below,
+# which names nats-server, bun, claude and arc explicitly. If a tool is ever
+# added to bin without a line there it leaves the fingerprint silently -
+# test-vm-fingerprint.sh asserts those four names for exactly that reason.
 #
 # arc ITSELF stays in the fingerprint (see layer2 versions below): it lives in
 # ~/arc, it decides how targets get installed, and it does not vary with which
 # target is under test. Tooling is environment; the target is not.
 for d in .local .bun; do
   [ -d "$d" ] || continue
-  find "$d" -path "$d/state" -prune -o -path "$d/share/metafactory" -prune -o ! -path "$d/install/cache/*.npm" -print
+  find "$d" -path "$d/state" -prune -o -path "$d/share/metafactory" -prune -o -path "$d/bin" -prune -o ! -path "$d/install/cache/*.npm" -print
 done | sort
 for d in .local .bun; do
   [ -d "$d" ] || continue
-  find "$d" -path "$d/state" -prune -o -path "$d/share/metafactory" -prune -o -type f ! -path "$d/install/cache/*.npm" -print0 | xargs -0 -r sha256sum
+  find "$d" -path "$d/state" -prune -o -path "$d/share/metafactory" -prune -o -path "$d/bin" -prune -o -type f ! -path "$d/install/cache/*.npm" -print0 | xargs -0 -r sha256sum
 done | sort -k2
 
 section "layer2 versions"
