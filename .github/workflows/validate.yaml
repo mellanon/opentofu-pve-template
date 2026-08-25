@@ -34,6 +34,13 @@ jobs:
           pipx install ansible-core
           pipx install ansible-lint
 
+      - name: copy examples
+        run: |
+          cp .sops.yaml.example .sops.yaml
+          cp guards.tofu.example guards.tofu
+          cp variables.tofu.example variables.tofu
+          cp inventory-example.yaml inventory/example.yaml
+
       - name: tofu init and validate
         run: |
           tofu init -input=false
