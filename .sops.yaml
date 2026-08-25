@@ -1,9 +1,0 @@
-creation_rules:
-  - path_regex: \.enc\.json$
-    # EDIT: your age recipient (public key). Generate a keypair with
-    #   age-keygen -o ~/.config/sops/age/keys.txt
-    # and paste the "public key:" line here. Consider adding a second,
-    # offline backup recipient: losing the only key after the first apply
-    # means permanently unreadable state.
-    age: >-
-      age1replace-me-with-your-own-recipient-public-key

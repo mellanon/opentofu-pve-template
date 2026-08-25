@@ -86,8 +86,36 @@ overall testing workflow.
 The two container directories are deployments that run on a persistent backend 
 system NOT on a test VM. In the reference implementation they are running on the
 same system that is running opentofu and ansible, but that is not required.
-Copy `.env.example` to `.env` and review docker-compose.yaml. All `.env`
-files are gitignored.
+
+## Opentofu and Ansible startup
+
+- `cp .sops.yaml.example .sops.yaml`
+- `cp guards.tofu.example guards.tofu`
+- `cp variables.tofu.example variables.tofu`
+- `cp inventory-example.yaml inventory/<vm_name>.yaml`
+
+## optel-lgtm startup
+
+- `cd optel-lgtm`
+- `cp .env.example .env`
+- `docker compose up -d`
+
+## windmill startup
+
+- `cd windmill`
+- `cp .env.example .env`
+- `docker compose up -d`
+
+## windmill local development
+
+[Windmill local development](https://www.windmill.dev/docs/advanced/local_development)
+[Windmill CLI](https://www.windmill.dev/docs/advanced/cli)
+
+- `cd windmill/local-dev`
+- `cp .env.example .env`
+- `cp wmill.yaml.example wmill.yaml`
+
+**Edit copied files with site specific information.**
 
 ## Prerequisites
 
@@ -202,7 +230,7 @@ on OS package manager versions.
   re-run ansible, capture again to the same path: an empty `git diff` is the
   proof.
 
-Short version of the command sequence to destroy, recreate, and validate the fingerprint assuming the inventory entry is for a VM called ubuntu-test at an IP of 10.1.1.5.
+Short version of the command sequence to destroy, recreate, and validate the fingerprint assuming the inventory entry is for a VM called ubuntu-test at an IP of 10.0.0.50.
 
 ```sh
 source tofu.env
@@ -211,7 +239,7 @@ tofu apply
 git mv inventory/destroy/ubuntu-test.yaml inventory/
 tofu apply
 ansible-playbook ansible/site.yaml --limit ubuntu-test
-./scripts/vm-fingerprint.sh ubuntu@10.1.1.5 fingerprints/ubuntu-test.txt
+./scripts/vm-fingerprint.sh ubuntu@10.0.0.50 fingerprints/ubuntu-test.txt
 git diff fingerprints/ubuntu-test.txt
 ```
 

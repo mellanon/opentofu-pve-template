@@ -127,7 +127,7 @@ codebases: []
 # Map workspace names to Windmill instances and per-workspace sync overrides
 workspaces:
   metafactory-infra:
-    baseUrl: http://10.0.0.31/  # EDIT: your Windmill instance URL
+    baseUrl: http://10.0.0.30/  # EDIT: your Windmill instance URL
     gitBranch: main                            # git branch to auto-detect this workspace (defaults to key name)
     # overrides:                           # override top-level sync options for this workspace
     #   skipSecrets: false
