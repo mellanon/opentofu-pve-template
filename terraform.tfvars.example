@@ -29,4 +29,4 @@ ssh_public_keys = [
 
 # The floor can be raised if you start using a different VMID band, but never
 # lowered - a validation in guards.tofu rejects anything below it.
-# managed_vmid_min = 210
+# managed_vmid_min = 500
