@@ -4,6 +4,9 @@
 notes.md
 WORKFLOW.md
 # opentofu
+guards.tofu
+variables.tofu
+inventory/*.yaml
 *.tfvars
 *.tfvars.json
 *.tfstate
@@ -16,14 +19,13 @@ WORKFLOW.md
 # traffic including the live API token - regardless of TF_LOG.
 crash.log
 crash.*.log
-# Live container env files; commit only the .env.example templates.
+# Live .env files; commit only the .env.example templates.
 .env
 # operator
 fingerprints/**
 !fingerprints/.gitkeep
-inventory/*.yaml
-!inventory/example.yaml
 # age/sops
+.sops.yaml
 keys.txt
 *.agekey
 # Decrypted copies of secrets.enc.json (sops -d > ...).
@@ -33,6 +35,7 @@ secrets.json
 # research into the container's internals
 /otel-lgtm/reference/
 # Windmill
+/windmill/local-dev/wmill.yaml
 /windmill/local-dev/node_modules/
 # logs/private
 /logs/**

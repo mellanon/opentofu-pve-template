@@ -1,0 +1,72 @@
+# variables.tofu
+#
+# Fleet-wide settings. Anything that varies per VM belongs in inventory/*.yaml
+# instead; see modules/vm/variables.tofu for that contract.
+
+variable "pve_node" {
+  description = "ProxMox node that hosts the VMs."
+  type        = string
+  default     = "pve"
+}
+
+variable "pve_endpoint" {
+  description = "ProxMox API endpoint. The SSH node address is derived from its host part. EDIT: point at your node."
+  type        = string
+  default     = "https://10.0.0.10:8006/"
+}
+
+variable "pve_ssh_private_key_path" {
+  description = <<-EOT
+    Private key used by the provider to SSH into the node. Required because the
+    ProxMox API has no endpoint for uploading snippets, so the provider falls
+    back to SSH for the cloud-init user-data files.
+  EOT
+  type        = string
+  default     = "~/.ssh/id_ed25519_pve"
+}
+
+variable "cloud_image_file_id" {
+  description = "Datastore reference to the Ubuntu cloud image used as the disk source. EDIT: upload a cloud image and point this at it."
+  type        = string
+  default     = "local:iso/resolute-server-cloudimg-amd64-20260720.img"
+}
+
+variable "snippet_datastore" {
+  description = "Datastore holding cloud-init snippets. Must have the 'snippets' content type (lvmthin cannot hold snippets; a dir datastore like 'local' can)."
+  type        = string
+  default     = "local"
+}
+
+variable "disk_datastore" {
+  description = "Datastore holding VM disks and cloud-init drives. EDIT: name your VM-disk datastore."
+  type        = string
+  default     = "local-lvm"
+}
+
+variable "network_bridge" {
+  description = "Bridge VM NICs attach to. The fwbr* interfaces are per-VM firewall bridges, not candidates."
+  type        = string
+  default     = "vmbr0"
+}
+
+variable "ci_user" {
+  description = "Login account created by cloud-init on every VM."
+  type        = string
+  default     = "ubuntu"
+}
+
+variable "ci_timezone" {
+  description = "Timezone applied by cloud-init on every VM."
+  type        = string
+  default     = "Etc/UTC"
+}
+
+variable "ssh_public_keys" {
+  description = "Public keys authorized for ci_user. Without at least one, the VMs are unreachable."
+  type        = list(string)
+
+  validation {
+    condition     = length(var.ssh_public_keys) > 0
+    error_message = "Provide at least one public key; the cloud image has no default password."
+  }
+}
