@@ -1,32 +1,42 @@
-# OpenTofu + ProxMox VE: declarative, repeatable test VMs
+# Smithy
 
-Infrastructure as code for provisioning and deprovisioning VMs on ProxMox VE
-with OpenTofu and cloud-init. Built for **repeatable software-test
-environments**: the environment around the software under test stays fixed —
-same image, same package versions — while the software varies, and several VM
-configurations can run side by side.
+A **smithy** is a work place that contains a forge, a kind of crucible. A place where one might forge weld several layers of steel into a single piece.
 
-Three layers: OpenTofu drives the hypervisor (bpg/proxmox provider),
-cloud-init gives the guest its boot-time identity, and Ansible installs
-software post-boot — re-appliable at any time without touching the VM
-lifecycle.
+## Infrastructure factory
 
-## What you get
+A reference implementation of infrastructure as code for provisioning and 
+deprovisioning VMs. Built for **repeatable software-test environments**: 
+the environment around the software under test stays fixed — same image, 
+same package versions. The VMs are designed to be ephemeral.
+
+Core components for VM management: 
+- OpenTofu drives the ProxMox VE hypervisor (bpg/proxmox provider)
+- cloud-init gives the guest its boot-time identity
+- Ansible installs software post-boot — re-appliable at any time without 
+touching the VM lifecycle.
+
+Persistent backend components:
+- A grafana/optel-lgtm container provides an OpenTelemetry endpoint to 
+capture and store Claude Code telemetry from agents running during testing. 
+- A windmill-labs/windmill container is being evaluated as an orchestrator for the
+overall testing workflow.
+
+## Overview 
 
 - **One YAML file per VM.** Provisioning is adding a file to `inventory/`;
-  deprovisioning is deleting one. Only `vm_id` is required — everything else
-  inherits a typed `optional()` default from the `spec` contract in
-  `modules/vm/variables.tofu`.
+  deprovisioning is deleting one, or moving it to the destroy subdiredtory. 
+  Only `vm_id` is required — everything else inherits a typed `optional()` 
+  default from the `spec` contract in `modules/vm/variables.tofu`.
 - **Repeatable environments.** Per-VM `archive_snapshot:` pins apt to
   [snapshot.ubuntu.com](https://snapshot.ubuntu.com) at a chosen instant, so
   package installs resolve identically forever; `package_upgrade` defaults to
   false. Third-party repos (e.g. docker) are covered by explicit version pins
   in the ansible role defaults instead.
-- **Composable post-boot software (layer 2).** A spec lists ansible roles
+- **Composable post-boot software.** A spec lists ansible roles, for example,
   (`ansible_roles: [nats_server, bun, claude, docker, metafactory_arc]`) and
   `ansible-playbook ansible/site.yaml` applies them — idempotently, with every
   download verified and every version pinned. A dynamic inventory reads
-  the tofu state, so there is no hosts file to maintain, and changing layer-2
+  the tofu state, so there is no hosts file to maintain, and changing ansible 
   content never diffs the plan or recreates a VM.
 - **Guardrails for pre-existing VMs.** A VMID floor, a named protected list,
   and a live check that refuses to plan against any VM on the node not tagged
@@ -57,7 +67,7 @@ lifecycle.
 ├── cloud-init/
 │   ├── base.yaml.tftpl            # every VM gets this - the whole document
 │   └── base.runcmd.json.tftpl     # commands every VM runs
-├── ansible/               # layer 2: post-boot software
+├── ansible/               # post-boot software
 │   ├── ansible.cfg
 │   ├── site.yaml                  # one hostvar-driven play
 │   ├── inventory/tofu.py          # dynamic inventory from tofu output
@@ -73,9 +83,10 @@ lifecycle.
                            # CLI workspace)
 ```
 
-The two container directories are deployments that run *on* a provisioned VM
-(via the `docker` ansible role), not part of the OpenTofu layer. Copy each
-`.env.example` to `.env` and fill it in on the target host; the live `.env`
+The two container directories are deployments that run on a persistent backend 
+system NOT on a test VM. In the reference implementation they are running on the
+same system that is running opentofu and ansible, but that is not required.
+Copy `.env.example` to `.env` and review docker-compose.yaml. All `.env`
 files are gitignored.
 
 ## Prerequisites
@@ -83,6 +94,16 @@ files are gitignored.
 - OpenTofu >= 1.10, `sops`, `age`, `ansible` (ansible-core >= 2.15;
   `ansible-lint` optional), and (for the cloud-init check script)
   `python3-yaml` and `cloud-init` on the workstation.
+
+- OpenTofu, https://github.com/opentofu/opentofu/releases/tag/v1.12.6
+- sops, https://github.com/getsops/sops/releases/tag/v3.13.3
+- age, https://github.com/FiloSottile/age/releases/tag/v1.2.1
+- uv, https://github.com/astral-sh/uv/releases/tag/0.12.5
+
+Note: A planned future update will move ansible to a Python venv using Astral uv
+to manage Python, and provide a pinned dependency versions rather than relying
+on OS package manager versions.
+
 - A ProxMox VE node (built against 9.x) with:
   - a datastore that allows the `snippets` content type (`local` by default;
     lvmthin cannot hold snippets),
@@ -165,7 +186,7 @@ files are gitignored.
   repo while the VM, its disk, and its snippet are destroyed. Moving it back
   provisions a fresh VM (all guest data is gone). To keep a VM but power it
   off, set `started: false` instead.
-- **Install software (layer 2):** list roles in the spec
+- **Install software:** list roles in the spec
   (`ansible_roles: [docker, ...]`) and run
   `ansible-playbook ansible/site.yaml [--limit <vm>]` — no plan diff, no
   recreation, idempotent (second run reports changed=0). Removing a role from
@@ -179,7 +200,7 @@ files are gitignored.
   ansible-installed files — minus per-instance noise like host keys and
   machine-id) into a tracked file. Capture, commit, destroy + reprovision,
   re-run ansible, capture again to the same path: an empty `git diff` is the
-  proof, now spanning both layers.
+  proof.
 
 Short version of the command sequence to destroy, recreate, and validate the fingerprint assuming the inventory entry is for a VM called ubuntu-test at an IP of 10.1.1.5.
 
@@ -196,7 +217,7 @@ git diff fingerprints/ubuntu-test.txt
 
 NOTE: The inventory/destroy directory name is intentional, so it is clear what the next "tofu apply" is expected to do.
 
-## Layer 2: Ansible
+## Ansible
 
 Cloud-init is decided at first boot and reachable only by recreating the VM —
 that is the right place for identity, network, and the apt baseline, and the
