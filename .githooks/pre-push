@@ -1,0 +1,56 @@
+#!/bin/sh
+# Scrub guard for the public repo files. Rejects any push whose outgoing
+# commits contain private site strings or private-only files. 
+# Operators can put custom patterns in gitignored prepush.env
+#
+# Stdin: one line per ref being pushed: <local_ref> <local_sha> <remote_ref> <remote_sha>
+
+set -u
+
+# Defaults blocks 192.168.x.x since that's the most common home network space and
+# CONTRIBUTING says to use 10.0.0.x network for examples
+DENY_CONTENT='192\.168\.'
+DENY_PATHS='^private/|^fingerprints/|^\.sops\.yaml$|^secrets\.enc\.json$|^terraform\.tfvars$|^guards.tofu$|^variables.tofu$|^notes\.md$'
+# If optional prepush.env exists then use it 
+if [ -s ../prepush.env ]; then
+  source ../prepush.env
+fi
+
+ZERO=0000000000000000000000000000000000000000
+fail=0
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+    [ "$local_sha" = "$ZERO" ] && continue   # deleting a remote ref: nothing outgoing
+    if [ "$remote_sha" = "$ZERO" ]; then
+        # New remote branch: scan everything not already on any remote ref.
+        range="$local_sha --not --remotes=origin"
+    else
+        range="$remote_sha..$local_sha"
+    fi
+
+    # shellcheck disable=SC2086
+    for commit in $(git rev-list $range); do
+        # Private-only paths must never appear in a public commit.
+        # fingerprints/.gitkeep is the one exception: the public repo needs the
+        # empty directory to exist, but every real capture stays private.
+        bad_paths=$(git diff-tree --no-commit-id --name-only -r "$commit" | grep -vx 'fingerprints/.gitkeep' | grep -E "$DENY_PATHS")
+        if [ -n "$bad_paths" ]; then
+            echo "pre-push: BLOCKED — commit $commit touches private-only path(s):" >&2
+            echo "$bad_paths" | sed 's/^/    /' >&2
+            fail=1
+        fi
+        # Site-specific strings must never appear in added lines.
+        bad_lines=$(git show --no-color --format= "$commit" | grep -E '^\+' | grep -E -i "$DENY_CONTENT")
+        if [ -n "$bad_lines" ]; then
+            echo "pre-push: BLOCKED — commit $commit adds site-specific content:" >&2
+            echo "$bad_lines" | head -10 | sed 's/^/    /' >&2
+            fail=1
+        fi
+    done
+done
+
+if [ "$fail" -ne 0 ]; then
+    echo "pre-push: push rejected. Remove the private data from the outgoing commits" >&2
+    exit 1
+fi
+exit 0

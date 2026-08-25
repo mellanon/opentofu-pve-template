@@ -115,6 +115,11 @@ same system that is running opentofu and ansible, but that is not required.
 - `cp .env.example .env`
 - `cp wmill.yaml.example wmill.yaml`
 
+## Optional pre-push guard hook
+
+- `cp prepush.env.example prepush.env`
+- `git config core.hooksPath .githooks`
+
 **Edit copied files with site specific information.**
 
 ## Prerequisites

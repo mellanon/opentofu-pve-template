@@ -22,6 +22,7 @@ crash.*.log
 # Live .env files; commit only the .env.example templates.
 .env
 # operator
+prepush.env
 fingerprints/**
 !fingerprints/.gitkeep
 # age/sops
