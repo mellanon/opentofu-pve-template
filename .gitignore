@@ -29,6 +29,7 @@ fingerprints/**
 .sops.yaml
 keys.txt
 *.agekey
+secrets.enc.json
 # Decrypted copies of secrets.enc.json (sops -d > ...).
 *.dec.json
 secrets.json
