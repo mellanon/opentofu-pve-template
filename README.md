@@ -93,6 +93,7 @@ same system that is running opentofu and ansible, but that is not required.
 - `cp guards.tofu.example guards.tofu`
 - `cp variables.tofu.example variables.tofu`
 - `cp inventory-example.yaml inventory/<vm_name>.yaml`
+- `tofu init`
 
 ## optel-lgtm startup
 
@@ -131,7 +132,7 @@ same system that is running opentofu and ansible, but that is not required.
 - OpenTofu, https://github.com/opentofu/opentofu/releases/tag/v1.12.6
 - sops, https://github.com/getsops/sops/releases/tag/v3.13.3
 - age, https://github.com/FiloSottile/age/releases/tag/v1.2.1
-- uv, https://github.com/astral-sh/uv/releases/tag/0.12.5
+- uv, https://github.com/astral-sh/uv/releases/tag/0.12.6
 
 Note: A planned future update will move ansible to a Python venv using Astral uv
 to manage Python, and provide a pinned dependency versions rather than relying
@@ -205,7 +206,9 @@ on OS package manager versions.
 
    ```bash
    source tofu.env    # decrypts the state passphrase, sets up logging
-   tofu init && tofu plan
+   # 'tofu init' should have already been run during setup above
+   # If not, then run 'tofu init' before running 'tofu plan'
+   tofu plan
    ```
 
 ## Usage
