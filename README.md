@@ -94,7 +94,7 @@ same system that is running opentofu and ansible, but that is not required.
 - `cp variables.tofu.example variables.tofu`
 - `cp inventory-example.yaml inventory/<vm_name>.yaml`
 - `uv venv --python 3.14 --managed-python`
-- `uv pip install -r requirements.txt'
+- `uv pip install -r requirements.txt`
 - `source tofu.env` # this also sources .venv/bin/activate
 - `tofu init` # the first init installs the providers
 
@@ -193,22 +193,48 @@ same system that is running opentofu and ansible, but that is not required.
    ssh-copy-id -i ~/.ssh/id_ed25519_pve.pub root@<your-node>
    ```
 
-4. **Variables.** `cp terraform.tfvars.example terraform.tfvars` and set
-   `ssh_public_keys` (the keys that reach the *VMs* — not the provisioning
-   key). Override any fleet defaults there too.
+## Opentofu and Ansible startup
 
-5. **Guards.** Edit `guards.tofu`: set the VMID floor and list your
-   pre-existing VMs (defaults and validation lists together — the comments
-   mark both spots).
+Note: Edit all the copied files with your specific data.
 
-6. **Plan.**
+- `cp .sops.yaml.example .sops.yaml`
+- `cp guards.tofu.example guards.tofu`
+- `cp variables.tofu.example variables.tofu`
+- `cp inventory-example.yaml inventory/<vm_name>.yaml`
+- `uv venv --python 3.14 --managed-python`
+- `uv pip install -r requirements.txt`
+- `source tofu.env` # this also sources .venv/bin/activate
+- `tofu init` # the first init installs the providers
+- `tofu plan` # verify the output looks like what you expect
 
-   ```bash
-   source tofu.env    # decrypts the state passphrase, sets up logging
-   # 'tofu init' should have already been run during setup above
-   # If not, then run 'tofu init' before running 'tofu plan'
-   tofu plan
-   ```
+Note: The `ssh_public_keys` in terraform.tfvars are the keys that reach the *VMs* 
+NOT the Proxmox VE provisioning key. Override any fleet defaults there too.
+
+## optel-lgtm startup
+
+- `cd optel-lgtm`
+- `cp .env.example .env`
+- `docker compose up -d`
+
+## windmill startup
+
+- `cd windmill`
+- `cp .env.example .env`
+- `docker compose up -d`
+
+## windmill local development
+
+[Windmill local development](https://www.windmill.dev/docs/advanced/local_development)
+[Windmill CLI](https://www.windmill.dev/docs/advanced/cli)
+
+- `cd windmill/local-dev`
+- `cp .env.example .env`
+- `cp wmill.yaml.example wmill.yaml`
+
+## Optional pre-push guard hook
+
+- `cp prepush.env.example prepush.env`
+- `git config core.hooksPath .githooks`
 
 ## Usage
 
@@ -237,7 +263,12 @@ same system that is running opentofu and ansible, but that is not required.
   re-run ansible, capture again to the same path: an empty `git diff` is the
   proof.
 
-Short version of the command sequence to destroy, recreate, and validate the fingerprint assuming the inventory entry is for a VM called ubuntu-test at an IP of 10.0.0.50.
+## Fingerprints
+
+Short version of the command sequence to destroy, recreate, and validate the fingerprint assuming the inventory entry is for a VM called ubuntu-test at an IP of 10.0.0.50. 
+This test assumes the first build fingerprint was saved as fingerprints/ubuntu-test-build1.txt. Rebuilding the same configuration should be an empty diff.
+
+**Important**: Always start a session with `source tofu.env`
 
 ```sh
 source tofu.env
@@ -246,8 +277,8 @@ tofu apply
 git mv inventory/destroy/ubuntu-test.yaml inventory/
 tofu apply
 ansible-playbook ansible/site.yaml --limit ubuntu-test
-./scripts/vm-fingerprint.sh ubuntu@10.0.0.50 fingerprints/ubuntu-test.txt
-git diff fingerprints/ubuntu-test.txt
+./scripts/vm-fingerprint.sh ubuntu@10.0.0.50 fingerprints/ubuntu-test-build2.txt
+diff fingerprints/ubuntu-test-build1.txt fingerprints/ubuntu-test-build2.txt
 ```
 
 NOTE: The inventory/destroy directory name is intentional, so it is clear what the next "tofu apply" is expected to do.
