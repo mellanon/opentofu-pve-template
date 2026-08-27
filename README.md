@@ -87,45 +87,6 @@ The two container directories are deployments that run on a persistent backend
 system NOT on a test VM. In the reference implementation they are running on the
 same system that is running opentofu and ansible, but that is not required.
 
-## Opentofu and Ansible startup
-
-- `cp .sops.yaml.example .sops.yaml`
-- `cp guards.tofu.example guards.tofu`
-- `cp variables.tofu.example variables.tofu`
-- `cp inventory-example.yaml inventory/<vm_name>.yaml`
-- `uv venv --python 3.14 --managed-python`
-- `uv pip install -r requirements.txt`
-- `source tofu.env` # this also sources .venv/bin/activate
-- `tofu init` # the first init installs the providers
-
-## optel-lgtm startup
-
-- `cd optel-lgtm`
-- `cp .env.example .env`
-- `docker compose up -d`
-
-## windmill startup
-
-- `cd windmill`
-- `cp .env.example .env`
-- `docker compose up -d`
-
-## windmill local development
-
-[Windmill local development](https://www.windmill.dev/docs/advanced/local_development)
-[Windmill CLI](https://www.windmill.dev/docs/advanced/cli)
-
-- `cd windmill/local-dev`
-- `cp .env.example .env`
-- `cp wmill.yaml.example wmill.yaml`
-
-## Optional pre-push guard hook
-
-- `cp prepush.env.example prepush.env`
-- `git config core.hooksPath .githooks`
-
-**Edit copied files with site specific information.**
-
 ## Prerequisites
 
 - OpenTofu >= 1.10, `sops`, `age`, `ansible` (ansible-core >= 2.15;
