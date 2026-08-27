@@ -93,7 +93,10 @@ same system that is running opentofu and ansible, but that is not required.
 - `cp guards.tofu.example guards.tofu`
 - `cp variables.tofu.example variables.tofu`
 - `cp inventory-example.yaml inventory/<vm_name>.yaml`
-- `tofu init`
+- `uv venv --python 3.14 --managed-python`
+- `uv pip install -r requirements.txt'
+- `source tofu.env` # this also sources .venv/bin/activate
+- `tofu init` # the first init installs the providers
 
 ## optel-lgtm startup
 
@@ -133,10 +136,6 @@ same system that is running opentofu and ansible, but that is not required.
 - sops, https://github.com/getsops/sops/releases/tag/v3.13.3
 - age, https://github.com/FiloSottile/age/releases/tag/v1.2.1
 - uv, https://github.com/astral-sh/uv/releases/tag/0.12.6
-
-Note: A planned future update will move ansible to a Python venv using Astral uv
-to manage Python, and provide a pinned dependency versions rather than relying
-on OS package manager versions.
 
 - A ProxMox VE node (built against 9.x) with:
   - a datastore that allows the `snippets` content type (`local` by default;
