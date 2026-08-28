@@ -1,0 +1,21 @@
+---
+# Collections used beyond ansible.builtin, pinned like every other version in
+# this repo.
+#
+# CI installs exactly these (.github/workflows/validate.yaml). Locally they
+# arrive incidentally, because requirements.txt pins the batteries-included
+# `ansible` package rather than `ansible-core` - so the versions below are the
+# ones that package currently ships. If the two ever diverge, local checks and
+# CI stop agreeing; the fix is to move requirements.txt to ansible-core and
+# install from this file locally too.
+collections:
+  # timezone. The only declarative option for it - ansible.builtin has none.
+  - name: community.general
+    version: "13.3.0"
+
+  # Not used yet. Declared with community.general because it is the other
+  # collection a system-level role reaches for first (sysctl, mount,
+  # pam_limits), and adding it now costs one pinned line instead of a second
+  # round of CI plumbing later.
+  - name: ansible.posix
+    version: "2.2.2"

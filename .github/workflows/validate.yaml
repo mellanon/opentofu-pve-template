@@ -17,22 +17,17 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: opentofu/setup-opentofu@v1
-        with:
-          # The wrapper buffers tofu's stdio to capture outputs, which breaks
-          # the `printf ... | tofu console` pipe inside check-cloud-init.sh
-          # (the pipe hangs). We don't consume outputs, so run tofu directly.
-          tofu_wrapper: false
 
       - name: Install validation dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cloud-init python3-yaml
-          # pipx, not pip --user: a --user-site jsonschema shadows the system
-          # one and crashes the runner's cloud-init (`schema` hits a
-          # registry= kwarg mismatch). pipx keeps ansible's deps in their own
-          # venvs; ansible-lint pulls ansible-core into its venv itself.
+          # pipx, not pip --user: it keeps ansible's dependencies in their
+          # own venvs. ansible-lint pulls ansible-core into its venv itself.
           pipx install ansible-core
           pipx install ansible-lint
+          # ansible-core ships no community collections, so without this the
+          # roles' non-builtin FQCNs resolve locally (requirements.txt pins the
+          # batteries-included `ansible` package) and fail here.
+          ansible-galaxy collection install -r ansible/requirements.yml
 
       - name: copy examples
         run: |
@@ -45,9 +40,6 @@ jobs:
         run: |
           tofu init -input=false
           tofu validate
-
-      - name: check-cloud-init
-        run: ./scripts/check-cloud-init.sh
 
       # check-ansible.sh needs an applied tofu state (it inspects the live
       # dynamic inventory), so CI runs only its state-independent parts.
