@@ -13,35 +13,37 @@ jobs:
       # Read-only rendering only: satisfies the state-encryption config and
       # its >=16-char validation. No state is created or read in CI.
       TF_VAR_state_passphrase: ci-dummy-passphrase-render-only
+      # The same path tofu.env sets locally, so scripts/install-collections.sh
+      # and every ansible command after it agree on one location. github is
+      # available in a job env: block; runner is not - naming runner.temp in
+      # an expression here makes the whole workflow file invalid, and no
+      # pull_request run is created at all.
+      ANSIBLE_COLLECTIONS_PATH: ${{ github.workspace }}/.venv/share/ansible/collections
     steps:
       - uses: actions/checkout@v4
 
       - uses: opentofu/setup-opentofu@v1
 
+      # Exact tag: setup-uv stopped publishing moving major aliases after
+      # v8, so @v10 does not resolve.
+      - uses: astral-sh/setup-uv@v10.0.1
+
       - name: Install validation dependencies
         run: |
-          # pipx, not pip --user: it keeps ansible's dependencies in their
-          # own venvs. ansible-lint pulls ansible-core into its venv itself.
-          pipx install ansible-core
-          pipx install ansible-lint
-          # The roles' non-builtin FQCNs resolve locally because requirements.txt
-          # pins the batteries-included `ansible` package; here they have to be
-          # fetched - into one path every later step agrees on. Each tool has
-          # its own default view of where collections live: the runner ships
-          # some preinstalled, and ansible-lint runs from its own pipx venv and
-          # reads neither those nor ansible-core's. Without the explicit -p and
-          # --force, galaxy finds the runner's copies, reports "nothing to do",
-          # and ansible-lint still cannot resolve community.general.
-          #
-          # Exported through GITHUB_ENV rather than the job's env: block
-          # because that block cannot see the runner context. Singular _PATH -
-          # ansible-compat hard errors on the plural spelling - and outside the
-          # workspace, so ansible-lint never walks it as project files.
-          collections="$RUNNER_TEMP/ansible-collections"
-          echo "ANSIBLE_COLLECTIONS_PATH=$collections" >>"$GITHUB_ENV"
-          ansible-galaxy collection install -r ansible/requirements.yml \
-            -p "$collections" --force
-          ansible-galaxy collection list -p "$collections"
+          # The same environment README.md tells an operator to build, from the
+          # same pinned file: requirements.txt is a uv pip freeze, so CI and a
+          # workstation run identical versions on identical Python. That
+          # matters because requirements.txt pins ansible-core, which ships no
+          # collections - both sides get theirs from ansible/requirements.yml
+          # via the script below, and an unpinned community.* module therefore
+          # fails in both places rather than only here.
+          uv venv --python 3.14 --managed-python
+          uv pip install -r requirements.txt
+          # PATH, not activate: the venv has to outlive this step, and each
+          # step is its own shell. This also puts it ahead of the runner
+          # image's own preinstalled ansible.
+          echo "$PWD/.venv/bin" >>"$GITHUB_PATH"
+          ./scripts/install-collections.sh
 
       - name: copy examples
         run: |

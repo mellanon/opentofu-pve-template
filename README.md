@@ -69,14 +69,14 @@ overall testing workflow.
 ├── modules/vm-pve/        # the contract: what a VM is
 ├── ansible/               # post-boot software
 │   ├── ansible.cfg
-│   ├── requirements.yml           # pinned collections (CI installs these)
+│   ├── requirements.yml           # pinned collections (the only source)
 │   ├── site.yaml                  # base, then each VM's declared roles
 │   ├── inventory/tofu.py          # dynamic inventory from tofu output
 │   └── roles/<role>/              # base (every VM), then nats_server, bun,
 │                                  # claude, docker, metafactory_arc
 ├── inventory/             # one YAML file per VM                       [EDIT]
 ├── scripts/               # build-image.sh, check-ansible.sh,
-│                          # vm-fingerprint.sh
+│                          # install-collections.sh, vm-fingerprint.sh
 ├── otel-lgtm/             # grafana/otel-lgtm observability stack      [EDIT]
 │                          # (docker compose; see its README.md)
 └── windmill/              # Windmill workflow engine (docker compose;  [EDIT]
@@ -196,6 +196,7 @@ Note: Edit all the copied files with your specific data.
 - `uv venv --python 3.14 --managed-python`
 - `uv pip install -r requirements.txt`
 - `source tofu.env` # this also sources .venv/bin/activate
+- `./scripts/install-collections.sh` # after tofu.env, which names the path
 - `tofu init` # the first init installs the providers
 - `tofu plan` # verify the output looks like what you expect
 
@@ -306,9 +307,11 @@ declarative grammar as the rest of the repo:
   loop. It owns the apt snapshot pin, the `APT::Periodic` zeros, the masked
   apt-daily timers, key-only SSH, the timezone, and the spec's `packages:` —
   the baseline that used to be cloud-init's, now re-appliable to a running VM.
-- **Collections are pinned** in `ansible/requirements.yml`, and CI installs
-  from it. `ansible-core` ships none, so a `community.*` task without an entry
-  there passes locally and fails in CI.
+- **Collections are pinned** in `ansible/requirements.yml`, and both a
+  workstation and CI install from it with `./scripts/install-collections.sh`.
+  `requirements.txt` pins `ansible-core`, which ships none, so a `community.*`
+  task without an entry there fails in both places — and `check-ansible.sh`
+  verifies the installed versions against the pins before it lints anything.
 - **Role names use underscores** (`nats_server`, not `nats-server`): they
   double as Ansible group names, which must be valid identifiers.
 - **Every download is verified, every version pinned** in the role's

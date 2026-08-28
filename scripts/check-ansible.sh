@@ -19,11 +19,44 @@ if [ -z "${TF_VAR_state_passphrase:-}" ]; then
   echo "TF_VAR_state_passphrase is not set; run 'source tofu.env' first so the inventory can read the tofu state" >&2
   exit 1
 fi
+if [ -z "${ANSIBLE_COLLECTIONS_PATH:-}" ]; then
+  echo "ANSIBLE_COLLECTIONS_PATH is not set; run 'source tofu.env' first" >&2
+  exit 1
+fi
 export ANSIBLE_CONFIG="$PWD/ansible/ansible.cfg"
 
 status=0
 
-# 1. Inventory: valid JSON with the hostvars site.yaml and the roles rely on,
+# 1. Collections: every pin in ansible/requirements.yml installed, at exactly
+#    the pinned version. Nothing else supplies them - requirements.txt pins
+#    ansible-core, which ships none - and without this check a missing or
+#    stale collection surfaces only as an opaque ansible-lint
+#    "couldn't resolve module/action" three checks later.
+if python3 -c '
+import json, sys
+from pathlib import Path
+import yaml
+
+root = Path(sys.argv[1]) / "ansible_collections"
+pins = yaml.safe_load(Path("ansible/requirements.yml").read_text())["collections"]
+for pin in pins:
+    fqcn = pin["name"]
+    manifest = root / Path(fqcn.replace(".", "/")) / "MANIFEST.json"
+    if not manifest.is_file():
+        sys.exit(f"{fqcn} is not installed - run ./scripts/install-collections.sh")
+    want = pin["version"]
+    found = json.loads(manifest.read_text())["collection_info"]["version"]
+    if found != want:
+        sys.exit(f"{fqcn} is {found}, pinned at {want} - run ./scripts/install-collections.sh")
+print(f"ok    collections ({len(pins)} pinned)")
+' "$ANSIBLE_COLLECTIONS_PATH"; then
+  :
+else
+  echo "FAIL  collections" >&2
+  status=1
+fi
+
+# 2. Inventory: valid JSON with the hostvars site.yaml and the roles rely on,
 #    and every declared role backed by a real role directory (belt and braces
 #    with the tofu plan-time validation).
 if ansible-inventory --list | python3 -c '
@@ -50,7 +83,7 @@ else
   status=1
 fi
 
-# 2. Playbook syntax.
+# 3. Playbook syntax.
 if ansible-playbook ansible/site.yaml --syntax-check >/dev/null; then
   echo "ok    site.yaml syntax"
 else
@@ -58,7 +91,7 @@ else
   status=1
 fi
 
-# 3. Lint, when available.
+# 4. Lint, when available.
 if command -v ansible-lint >/dev/null; then
   if (cd ansible && ansible-lint) >/dev/null 2>&1; then
     echo "ok    ansible-lint"

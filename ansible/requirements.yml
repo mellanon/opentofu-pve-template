@@ -2,12 +2,11 @@
 # Collections used beyond ansible.builtin, pinned like every other version in
 # this repo.
 #
-# CI installs exactly these (.github/workflows/validate.yaml). Locally they
-# arrive incidentally, because requirements.txt pins the batteries-included
-# `ansible` package rather than `ansible-core` - so the versions below are the
-# ones that package currently ships. If the two ever diverge, local checks and
-# CI stop agreeing; the fix is to move requirements.txt to ansible-core and
-# install from this file locally too.
+# The only source of collections in either environment: requirements.txt pins
+# ansible-core, which ships none, and scripts/install-collections.sh installs
+# exactly what is below - locally into .venv/, in CI into the same path under
+# the workspace. So a community.* module missing from this file fails
+# everywhere, instead of passing on a workstation and failing in CI.
 collections:
   # timezone. The only declarative option for it - ansible.builtin has none.
   - name: community.general

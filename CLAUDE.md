@@ -38,9 +38,19 @@ it is the only action that puts one in destroy range.
 ## Working on this
 
 Always `source tofu.env` first — it exports `TF_VAR_state_passphrase` from
-sops and redirects logs to `logs/tofu.log`. Without it every command fails on
-the state encryption key. It refuses to run if sops fails or you are not in
-the repo root.
+sops, redirects logs to `logs/tofu.log`, activates `.venv`, and exports
+`ANSIBLE_CONFIG` and `ANSIBLE_COLLECTIONS_PATH`. Without it every command
+fails on the state encryption key, and every ansible command looks for
+collections in the wrong place. It refuses to run if sops fails or you are not
+in the repo root.
+
+The venv is the whole Python environment and CI builds the same one from the
+same `requirements.txt` (a `uv pip freeze`; README.md has the setup steps).
+It pins `ansible-core`, not the batteries-included `ansible` package, so
+collections come only from `ansible/requirements.yml` via
+`./scripts/install-collections.sh`, which writes into
+`.venv/share/ansible/collections` — recreating the venv therefore requires
+re-running it.
 
 `terraform.tfvars` is gitignored and must exist locally; `ssh_public_keys` is
 the only required variable. See `terraform.tfvars.example`.
@@ -85,10 +95,11 @@ which serves interactive shells only). Underscore names,
 each a directory under `ansible/roles/`, typos fail at plan time. The dynamic
 inventory (`ansible/inventory/tofu.py`) reads `tofu output -json vms`, so it
 needs an applied state; versions are pinned in each role's
-`defaults/main.yaml`, and collections in `ansible/requirements.yml` (CI
-installs from it — `ansible-core` alone ships none, so a `community.*` task
-without a pin there passes locally and fails CI). The `base` role is in no
-spec and cannot be opted out of: `site.yaml` applies it to every host via
+`defaults/main.yaml`, and collections in `ansible/requirements.yml` (the only
+source of them in either environment — `ansible-core` ships none, so a
+`community.*` task without a pin there fails locally and in CI alike). The
+`base` role is in no spec and cannot be opted out of: `site.yaml` applies it
+to every host via
 `roles:`, ahead of the include loop. It carries what the cloud-init snippet
 used to — the apt snapshot pin, the `APT::Periodic` zeros, the apt-daily
 timers, key-only SSH, the timezone, and `spec.packages` — which means those
