@@ -1,58 +1,10 @@
-# modules/vm/main.tofu
+# modules/vm-pve/main.tofu
 
 locals {
-  fqdn = var.spec.dns_domain == null ? var.vm_name : "${var.vm_name}.${var.spec.dns_domain}"
-
-  # The VM resource blocks on the guest agent reporting an address, so the agent
-  # package is not optional.
-  ci_packages = distinct(concat(["qemu-guest-agent"], var.spec.packages))
-
   # Always applied, never left to inventory: the foreign-VM guard keys off it.
   # Sorted because ProxMox normalizes tag order; an unsorted list here would
   # read back differently and produce a perpetual diff.
   tags = sort(distinct(concat([var.managed_tag], var.spec.tags)))
-
-  # The runcmd list lives in cloud-init/base.runcmd.json.tftpl rather than in
-  # HCL so that scripts/check-cloud-init.sh renders the exact same source this
-  # module does; a hand-copied literal in the check script is how commands
-  # escaped validation before.
-  runcmd = jsondecode(
-    templatefile("${var.cloud_init_dir}/base.runcmd.json.tftpl", {
-      ci_user = var.ci_user
-      vm_name = var.vm_name
-    })
-  )
-
-  base_user_data = templatefile("${var.cloud_init_dir}/base.yaml.tftpl", {
-    vm_name          = var.vm_name
-    fqdn             = local.fqdn
-    timezone         = var.ci_timezone
-    ci_user          = var.ci_user
-    ssh_public_keys  = var.ssh_public_keys
-    packages         = local.ci_packages
-    runcmd           = local.runcmd
-    archive_snapshot = var.spec.archive_snapshot
-    package_upgrade  = var.spec.package_upgrade
-  })
-
-  user_data = trimspace(local.base_user_data)
-}
-
-# Uploaded over SSH: the ProxMox API exposes no endpoint for snippets.
-#
-# The snippet's ID is derived from its (stable) file name, so editing a
-# cloud-init template re-uploads the snippet but shows "0 to change" on the VM
-# - the running guest keeps whatever it booted with. Template changes reach a
-# VM only by recreating it (delete the inventory file, apply, restore, apply).
-resource "proxmox_virtual_environment_file" "user_data" {
-  node_name    = var.pve_node
-  datastore_id = var.snippet_datastore
-  content_type = "snippets"
-
-  source_raw {
-    file_name = "${var.vm_name}-user-data.yaml"
-    data      = local.user_data
-  }
 }
 
 resource "proxmox_virtual_environment_vm" "this" {
@@ -89,14 +41,18 @@ resource "proxmox_virtual_environment_vm" "this" {
   scsi_hardware = "virtio-scsi-single"
   boot_order    = ["scsi0"]
 
-  # Pointing file_id at the existing image makes ProxMox import and convert it
-  # into the target datastore; the source image is left untouched. file_id is
-  # ignore_changes'd below: it only matters at creation, and without that a
-  # bump of the fleet-wide cloud_image_file_id would diff - and destroy/create
-  # - every existing VM's disk at once.
+  # import_from, not file_id. Both make ProxMox import and convert the image
+  # into the target datastore and leave the source untouched, but file_id goes
+  # through the provider's "custom disk" path, which shells out to `qm` over
+  # SSH as root - the very dependency this design removes. import_from uses
+  # PVE's native import-from API parameter instead.
+  #
+  # It is create-only (the provider ignores later changes) and ignore_changes'd
+  # anyway: without that, bumping the fleet-wide cloud_image_file_id would diff
+  # - and destroy/create - every existing VM's disk at once.
   disk {
     datastore_id = var.disk_datastore
-    file_id      = var.cloud_image_file_id
+    import_from  = var.cloud_image_file_id
     interface    = "scsi0"
     size         = var.spec.disk_gb
     discard      = "on"
@@ -104,10 +60,29 @@ resource "proxmox_virtual_environment_vm" "this" {
     iothread     = true
   }
 
+  # PVE's native cloud-init: these are VM config, written to the ci drive by the
+  # node, so there is no snippet and no SSH to the hypervisor. Everything softer
+  # - packages, timezone, apt pinning - is ansible's job (layer 2).
+  #
+  # Unlike the snippet this replaced, changing a value here DOES diff and PVE
+  # regenerates the drive. That still does not reach a running guest: cloud-init
+  # consumes the drive on first boot only. Rotating a key on a live VM means
+  # ansible or a rebuild.
   initialization {
-    datastore_id      = var.disk_datastore
-    interface         = "ide2"
-    user_data_file_id = proxmox_virtual_environment_file.user_data.id
+    datastore_id = var.disk_datastore
+    interface    = "ide2"
+
+    # PVE fills in the rest from the distro default user (`users: - default`),
+    # which is where sudo, lock_passwd and the group list come from.
+    user_account {
+      username = var.ci_user
+      keys     = var.ssh_public_keys
+    }
+
+    # Stated explicitly because PVE defaults ciupgrade to 1 and the provider's
+    # schema default is Computed - leaving it unset is not a pin, and the
+    # default is the opposite of what spec.package_upgrade defaults to.
+    upgrade = var.spec.package_upgrade
 
     ip_config {
       ipv4 {
@@ -143,7 +118,7 @@ resource "proxmox_virtual_environment_vm" "this" {
   # Three layers of protection for the VMs that predate this project. These fail
   # the plan, unlike a check block, which would only warn.
   lifecycle {
-    ignore_changes = [disk[0].file_id]
+    ignore_changes = [disk[0].import_from]
 
     precondition {
       condition     = !contains(var.duplicate_vm_ids, var.spec.vm_id)

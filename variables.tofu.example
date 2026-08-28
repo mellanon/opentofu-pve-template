@@ -10,31 +10,15 @@ variable "pve_node" {
 }
 
 variable "pve_endpoint" {
-  description = "ProxMox API endpoint. The SSH node address is derived from its host part. EDIT: point at your node."
+  description = "ProxMox API endpoint. EDIT: point at your node."
   type        = string
   default     = "https://10.0.0.10:8006/"
 }
 
-variable "pve_ssh_private_key_path" {
-  description = <<-EOT
-    Private key used by the provider to SSH into the node. Required because the
-    ProxMox API has no endpoint for uploading snippets, so the provider falls
-    back to SSH for the cloud-init user-data files.
-  EOT
-  type        = string
-  default     = "~/.ssh/id_ed25519_pve"
-}
-
 variable "cloud_image_file_id" {
-  description = "Datastore reference to the Ubuntu cloud image used as the disk source. EDIT: upload a cloud image and point this at it."
+  description = "Datastore reference to the golden cloud image used as the disk source, built and uploaded by scripts/build-image.sh. EDIT: build an image and point this at it."
   type        = string
-  default     = "local:iso/resolute-server-cloudimg-amd64-20260720.img"
-}
-
-variable "snippet_datastore" {
-  description = "Datastore holding cloud-init snippets. Must have the 'snippets' content type (lvmthin cannot hold snippets; a dir datastore like 'local' can)."
-  type        = string
-  default     = "local"
+  default     = "local:import/resolute-server-cloudimg-amd64-20260720-golden-20260720T000000Z.qcow2"
 }
 
 variable "disk_datastore" {
@@ -56,7 +40,7 @@ variable "ci_user" {
 }
 
 variable "ci_timezone" {
-  description = "Timezone applied by cloud-init on every VM."
+  description = "Timezone applied by the ansible base role on every VM. Re-appliable: unlike a first-boot setting, changing it reaches existing VMs."
   type        = string
   default     = "Etc/UTC"
 }

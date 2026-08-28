@@ -9,8 +9,10 @@ reshapes `tofu output -json vms` into inventory JSON:
   - one host per VM, named by inventory name (so --limit <name> works)
   - group "vms" holding every reachable VM
   - one group per declared role, for ad-hoc targeting (ansible bun -m ...)
-  - hostvars: ansible_host (first agent-reported IPv4), ansible_user,
-    vm_id, vm_ansible_roles (what site.yaml applies)
+  - hostvars: ansible_host (the VM's own NIC, per the module output),
+    ansible_user,
+    vm_id, vm_ansible_roles (what site.yaml applies), and the three the base
+    role consumes: vm_packages, vm_archive_snapshot (may be None), vm_timezone
 
 A VM with no reported address (powered off, or agent not up yet) is skipped
 with a notice on stderr: an unreachable-by-design host in inventory would
@@ -70,6 +72,11 @@ def build_inventory():
             "ansible_user": vm["ansible_user"],
             "vm_id": vm["vm_id"],
             "vm_ansible_roles": vm.get("ansible_roles", []),
+            # Applied by the base role rather than at first boot, which is why
+            # they ride the inventory instead of the cloud-init drive.
+            "vm_packages": vm.get("packages", []),
+            "vm_archive_snapshot": vm.get("archive_snapshot"),
+            "vm_timezone": vm["timezone"],
         }
         inventory["vms"]["hosts"].append(name)
         for role in vm.get("ansible_roles", []):

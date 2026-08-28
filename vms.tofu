@@ -20,24 +20,21 @@ locals {
   ]
 }
 
-module "vm" {
-  source   = "./modules/vm"
+module "vm-pve" {
+  source   = "./modules/vm-pve"
   for_each = local.vms
 
   vm_name = each.key
   spec    = each.value
 
   # Fleet-wide settings, stated once here rather than repeated per inventory file.
-  cloud_init_dir      = "${path.module}/cloud-init"
   ansible_dir         = "${path.module}/ansible"
   pve_node            = var.pve_node
   cloud_image_file_id = var.cloud_image_file_id
-  snippet_datastore   = var.snippet_datastore
   disk_datastore      = var.disk_datastore
   network_bridge      = var.network_bridge
   ssh_public_keys     = var.ssh_public_keys
   ci_user             = var.ci_user
-  ci_timezone         = var.ci_timezone
 
   managed_tag      = local.managed_tag
   managed_vmid_min = var.managed_vmid_min

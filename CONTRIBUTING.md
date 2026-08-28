@@ -31,7 +31,9 @@ or tokens.
 With a ProxMox node of your own: copy `terraform.tfvars.example` to
 `terraform.tfvars`, fill in the `EDIT` values (see README.md for the full
 setup, including `secrets.enc.json` — layout in `secrets.enc.json.example`),
-then `source tofu.env` and use `inventory/example.yaml` as a starting spec.
+then `source tofu.env` and use `inventory-example.yaml` as a starting spec.
+You will also need a golden image on the node — `./scripts/build-image.sh
+--upload` builds and uploads one; see README.md, "Building the golden image".
 
 Without a node, run what CI runs:
 
@@ -39,7 +41,7 @@ Without a node, run what CI runs:
 export TF_VAR_state_passphrase=ci-dummy-passphrase-render-only
 tofu init -input=false
 tofu validate
-./scripts/check-cloud-init.sh          # needs: cloud-init, python3-yaml
+ansible-galaxy collection install -r ansible/requirements.yml
 ansible-playbook ansible/site.yaml --syntax-check -i localhost,
 (cd ansible && ansible-lint)
 ```
@@ -47,22 +49,18 @@ ansible-playbook ansible/site.yaml --syntax-check -i localhost,
 The dummy passphrase satisfies the state-encryption config for read-only
 rendering; no state is created or read.
 
-Notes on the two check scripts:
-
-- `check-cloud-init.sh` renders the real cloud-init output and validates it —
-  `tofu validate` alone never sees the YAML that comes out of
-  `templatefile()`. Run it after touching anything under `cloud-init/`.
-- `check-ansible.sh` needs an applied state (it inspects the live inventory),
-  so it only runs against a real environment; CI covers the state-independent
-  parts (syntax check and lint). Run the full script if you have a node.
+`check-ansible.sh` needs an applied state (it inspects the live inventory), so
+it only runs against a real environment; CI covers the state-independent parts
+(syntax check and lint). Run the full script if you have a node.
 
 ## Style
 
-- Every scalar interpolated into a cloud-init template must be
-  `jsonencode()`d — see the comments in `cloud-init/base.yaml.tftpl` and the
-  adversarial pass in `check-cloud-init.sh` that regresses this.
+- Any collection beyond `ansible.builtin` must be pinned in
+  `ansible/requirements.yml` in the same change that uses it. CI installs
+  `ansible-core`, which ships none, so an unpinned `community.*` task passes
+  locally and fails there.
 - Ansible role names use underscores; each is a directory under
   `ansible/roles/`. Pin software versions in the role's `defaults/main.yaml`.
 - Keep guard behavior intact: `guards.tofu` and the validations in
-  `modules/vm/variables.tofu` exist to protect pre-existing VMs and must not
+  `modules/vm-pve/variables.tofu` exist to protect pre-existing VMs and must not
   be weakened.

@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Validate the ansible layer: the dynamic inventory's shape and the site
-# playbook's syntax. Sibling of check-cloud-init.sh - run it after touching
-# anything under ansible/.
+# playbook's syntax. Run it after touching anything under ansible/.
 #
 # The inventory check needs the tofu state (that is where the fleet lives),
 # so this requires `source tofu.env` first, same as everything else here.
@@ -36,7 +35,8 @@ hostvars = inv.get("_meta", {}).get("hostvars", {})
 if not hostvars:
     sys.exit("no reachable VMs in inventory - is the fleet applied and running?")
 for host, hv in hostvars.items():
-    for key in ("ansible_host", "ansible_user", "vm_ansible_roles"):
+    for key in ("ansible_host", "ansible_user", "vm_ansible_roles",
+                "vm_packages", "vm_archive_snapshot", "vm_timezone"):
         if key not in hv:
             sys.exit(f"{host}: hostvar {key!r} missing")
     for role in hv["vm_ansible_roles"]:

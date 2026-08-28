@@ -1,4 +1,4 @@
-# modules/vm/versions.tofu
+# modules/vm-pve/versions.tofu
 #
 # A child module must name its provider source; without this OpenTofu assumes
 # hashicorp/proxmox and init fails.

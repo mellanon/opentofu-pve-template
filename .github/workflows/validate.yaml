@@ -24,10 +24,24 @@ jobs:
           # own venvs. ansible-lint pulls ansible-core into its venv itself.
           pipx install ansible-core
           pipx install ansible-lint
-          # ansible-core ships no community collections, so without this the
-          # roles' non-builtin FQCNs resolve locally (requirements.txt pins the
-          # batteries-included `ansible` package) and fail here.
-          ansible-galaxy collection install -r ansible/requirements.yml
+          # The roles' non-builtin FQCNs resolve locally because requirements.txt
+          # pins the batteries-included `ansible` package; here they have to be
+          # fetched - into one path every later step agrees on. Each tool has
+          # its own default view of where collections live: the runner ships
+          # some preinstalled, and ansible-lint runs from its own pipx venv and
+          # reads neither those nor ansible-core's. Without the explicit -p and
+          # --force, galaxy finds the runner's copies, reports "nothing to do",
+          # and ansible-lint still cannot resolve community.general.
+          #
+          # Exported through GITHUB_ENV rather than the job's env: block
+          # because that block cannot see the runner context. Singular _PATH -
+          # ansible-compat hard errors on the plural spelling - and outside the
+          # workspace, so ansible-lint never walks it as project files.
+          collections="$RUNNER_TEMP/ansible-collections"
+          echo "ANSIBLE_COLLECTIONS_PATH=$collections" >>"$GITHUB_ENV"
+          ansible-galaxy collection install -r ansible/requirements.yml \
+            -p "$collections" --force
+          ansible-galaxy collection list -p "$collections"
 
       - name: copy examples
         run: |

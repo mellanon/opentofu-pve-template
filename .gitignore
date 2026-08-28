@@ -47,3 +47,7 @@ private/**
 !private/.gitkeep
 # scratch
 tmp/
+# ansible-lint's cache and its symlinked copy of the project, written into
+# whichever directory holds .git - so the repo root, whatever `ansible-lint`
+# is run from.
+.ansible/

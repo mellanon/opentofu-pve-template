@@ -1,10 +1,17 @@
-# Applies each VM's spec-declared ansible_roles (inventory/<vm>.yaml ->
-# tofu output -> inventory/tofu.py hostvars). Adding a role to a VM never
-# touches this file; per-VM ordering follows the spec's list. A role name
-# with no ansible/roles/ directory fails loudly here AND at tofu plan time -
-# never a silent no-op.
-- name: Apply per-VM ansible roles
+# Applies the base role to every VM, then each VM's spec-declared
+# ansible_roles (inventory/<vm>.yaml -> tofu output -> inventory/tofu.py
+# hostvars). Adding a role to a VM never touches this file; per-VM ordering
+# follows the spec's list. A role name with no ansible/roles/ directory fails
+# loudly here AND at tofu plan time - never a silent no-op.
+#
+# base is not in any spec and cannot be opted out of: it carries what used to
+# be the cloud-init snippet, so every VM needs it. roles: runs ahead of
+# tasks:, which is what puts it before the include loop - the apt snapshot pin
+# it writes has to be in force before any role installs a package.
+- name: Apply the fleet baseline and each VM's declared roles
   hosts: vms
+  roles:
+    - base
   tasks:
     - name: Include each role the VM's spec declares
       ansible.builtin.include_role:

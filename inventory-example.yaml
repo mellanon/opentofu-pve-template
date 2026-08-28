@@ -2,7 +2,7 @@
 #
 # The file name is the VM name (must be a DNS label: lowercase letters, digits,
 # hyphens). Only vm_id is required; everything omitted takes the optional()
-# default from modules/vm/variables.tofu, so a three-line file is a complete
+# default from modules/vm-pve/variables.tofu, so a three-line file is a complete
 # VM. Deprovision by deleting this file and running `tofu apply`.
 
 vm_id: 500

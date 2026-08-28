@@ -5,27 +5,26 @@
 #
 # Per-VM settings do NOT belong here - they live in inventory/*.yaml.
 
-# Keys authorized for the cloud-init user on every VM. NOT the provisioning
-# key: id_ed25519_pve is root on the hypervisor and is deliberately kept out
-# of the VMs. See README.md, "Credentials".
+# Keys authorized for the cloud-init user on every VM. With the hypervisor
+# provisioning key gone, these and the API token are the whole of what this
+# project authenticates with. See README.md, "Credentials".
 ssh_public_keys = [
   "ssh-ed25519 AAAA...replace-me... user@desktop",      # workstation
   "ssh-ed25519 BBBB...replace-me... user@provisioner",  # box running tofu
 ]
 
-# pve_node                 = "pve"
-# pve_endpoint             = "https://10.0.0.10:8006/"
-# pve_ssh_private_key_path = "~/.ssh/id_ed25519_pve"
-# disk_datastore           = "local-lvm"
-# snippet_datastore        = "local"
-# network_bridge           = "vmbr0"
-# ci_user                  = "ubuntu"
-# ci_timezone              = "Etc/UTC"
+# pve_node       = "pve"
+# pve_endpoint   = "https://10.0.0.10:8006/"
+# disk_datastore = "local-lvm"
+# network_bridge = "vmbr0"
+# ci_user        = "ubuntu"
+# ci_timezone    = "Etc/UTC"
 
-# The base image every VM's disk is imported from. This is the line to change
-# when a new Ubuntu release ships; existing VMs keep the image they were
-# created from (the disk source is create-only), only new VMs pick it up.
-# cloud_image_file_id = "local:iso/resolute-server-cloudimg-amd64-20260720.img"
+# The golden image every VM's disk is imported from, built and uploaded by
+# scripts/build-image.sh. This is the line to change after building a new one;
+# existing VMs keep the image they were created from (the disk source is
+# create-only), only new VMs pick it up.
+# cloud_image_file_id = "local:iso/resolute-server-cloudimg-amd64-20260720-golden-20260720T000000Z.img"
 
 # The floor can be raised if you start using a different VMID band, but never
 # lowered - a validation in guards.tofu rejects anything below it.

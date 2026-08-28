@@ -1,0 +1,102 @@
+# Everything every VM gets, applied to every host before its spec-declared
+# roles. This is what the cloud-init snippet used to do at first boot, moved
+# to a layer that can be re-applied: change a VM's archive_snapshot, packages
+# or the fleet timezone and the next ansible-playbook run reaches the running
+# guest, instead of needing a rebuild.
+#
+# Not here, and deliberately: qemu-guest-agent. Apply blocks until the agent
+# reports an address and the dynamic inventory reads that address from the
+# agent, so ansible cannot be what installs it. It comes from the golden image
+# (scripts/build-image.sh).
+
+- name: Apply the fleet baseline
+  become: true
+  block:
+    # Both apt.conf.d filenames below are the ones cloud-init wrote, kept
+    # verbatim. "cloudinit" is a misnomer now, but scripts/vm-fingerprint.sh
+    # records apt configuration by filename - renaming them would make every
+    # fingerprint captured so far incomparable for no gain.
+    - name: Pin apt to the spec's archive snapshot
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/50cloudinit-snapshot
+        content: |
+          APT::Snapshot "{{ vm_archive_snapshot }}";
+        mode: "0644"
+      when: vm_archive_snapshot is not none
+
+    - name: Remove the apt snapshot pin when the spec has none
+      ansible.builtin.file:
+        path: /etc/apt/apt.conf.d/50cloudinit-snapshot
+        state: absent
+      when: vm_archive_snapshot is none
+
+    # The golden image ships this file too. Re-asserted here so a VM built
+    # from a stock cloud image is still safe, and so the fleet's stance
+    # survives anything that rewrites 20auto-upgrades.
+    - name: Zero the apt periodic jobs
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/51cloudinit-no-auto-upgrades
+        content: |
+          APT::Periodic::Update-Package-Lists "0";
+          APT::Periodic::Unattended-Upgrade "0";
+        mode: "0644"
+
+    # Zeroing the periodic jobs already makes these no-ops; disabling and then
+    # masking them is the belt-and-braces version. Masked rather than merely
+    # disabled because a package postinst re-running `systemctl preset` can
+    # undo a disable, and a test environment must not change itself.
+    - name: Stop and disable the apt-daily timers
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        enabled: false
+        state: stopped
+      loop:
+        - apt-daily.timer
+        - apt-daily-upgrade.timer
+
+    - name: Mask the apt-daily timers
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        masked: true
+      loop:
+        - apt-daily.timer
+        - apt-daily-upgrade.timer
+
+    # Key-only SSH used to be cloud-init's doing (ssh_pwauth: false, which
+    # wrote 50-cloud-init.conf). PVE's generated user-data has no equivalent,
+    # so without this the guarantee would rest entirely on the cloud image
+    # happening to ship 60-cloudimg-settings.conf - true today, and not
+    # something this repo would notice losing.
+    #
+    # 10-, because sshd takes the FIRST value it obtains for a keyword and
+    # reads the include glob in lexical order: a lower number wins, which is
+    # the opposite of apt.conf.d. KbdInteractiveAuthentication is included
+    # because disabling PasswordAuthentication alone still leaves a PAM
+    # keyboard-interactive path to password login.
+    - name: Enforce key-only SSH
+      ansible.builtin.copy:
+        dest: /etc/ssh/sshd_config.d/10-smithy.conf
+        content: |
+          PasswordAuthentication no
+          KbdInteractiveAuthentication no
+        mode: "0644"
+      notify: Reload sshd
+
+    # Validates the whole assembled config, not just the fragment above. It
+    # runs before the handler flushes, so a bad config fails the play with the
+    # running sshd still on its old configuration.
+    - name: Check the assembled sshd config is valid
+      ansible.builtin.command: /usr/sbin/sshd -t
+      changed_when: false
+
+    - name: Set the timezone
+      community.general.timezone:
+        name: "{{ vm_timezone }}"
+
+    # After the snapshot pin above, so the pin is in force for this install.
+    - name: Install the spec's packages
+      ansible.builtin.apt:
+        name: "{{ vm_packages }}"
+        state: present
+        update_cache: true
+      when: vm_packages | length > 0

@@ -10,13 +10,14 @@ the environment around the software under test stays fixed — same image,
 same package versions. The VMs are designed to be ephemeral.
 
 Core components for VM management: 
-- OpenTofu drives the ProxMox VE hypervisor (bpg/proxmox provider)
-- cloud-init gives the guest its boot-time identity
-- Ansible installs software post-boot — re-appliable at any time without 
+- A golden image carries what has to exist before first boot (the guest agent)
+- OpenTofu drives the ProxMox VE hypervisor (bpg/proxmox provider) and its 
+native cloud-init settings — identity, keys, addressing
+- Ansible owns everything after boot — re-appliable at any time without 
 touching the VM lifecycle.
 
 Persistent backend components:
-- A grafana/optel-lgtm container provides an OpenTelemetry endpoint to 
+- A grafana/otel-lgtm container provides an OpenTelemetry endpoint to 
 capture and store Claude Code telemetry from agents running during testing. 
 - A windmill-labs/windmill container is being evaluated as an orchestrator for the
 overall testing workflow.
@@ -24,9 +25,9 @@ overall testing workflow.
 ## Overview 
 
 - **One YAML file per VM.** Provisioning is adding a file to `inventory/`;
-  deprovisioning is deleting one, or moving it to the destroy subdiredtory. 
+  deprovisioning is deleting one, or moving it to the destroy subdirectory. 
   Only `vm_id` is required — everything else inherits a typed `optional()` 
-  default from the `spec` contract in `modules/vm/variables.tofu`.
+  default from the `spec` contract in `modules/vm-pve/variables.tofu`.
 - **Repeatable environments.** Per-VM `archive_snapshot:` pins apt to
   [snapshot.ubuntu.com](https://snapshot.ubuntu.com) at a chosen instant, so
   package installs resolve identically forever; `package_upgrade` defaults to
@@ -46,35 +47,35 @@ overall testing workflow.
 - **Encrypted state and plans** (pbkdf2 + AES-GCM, `enforced = true`), secrets
   via sops/age, and a `.gitignore` that covers the sharp edges (`crash.log`
   contains a TRACE-level dump including the API token, regardless of TF_LOG).
-- **Real validation gates.** `tofu validate` never sees the YAML that comes
-  out of `templatefile()`; `scripts/check-cloud-init.sh` renders the real
-  user-data plus an adversarial fixture (SSH key comment containing `: `,
-  package containing `#`, hostname that is a YAML boolean) and runs
-  duplicate-key and `cloud-init schema` checks, treating deprecation warnings
-  as failures. `scripts/check-ansible.sh` asserts the dynamic inventory's
-  shape and syntax-checks (and, when installed, lints) the playbook.
+- **Real validation gates.** `scripts/check-ansible.sh` asserts the dynamic
+  inventory's shape — every hostvar the roles rely on, every declared role
+  backed by a real directory — and syntax-checks and lints the playbook.
+  `scripts/build-image.sh` verifies the upstream image against its published
+  `SHA256SUMS`, asserts inside the built image that the build-time apt pin did
+  not leak, and has the node verify the upload's checksum.
 
 ## Layout
 
 ```
-├── versions.tofu  providers.tofu  encryption.tofu
+├── CLAUDE.md              # notes for coding agents; AGENTS.md is a symlink
+├── versions.tofu
+├── providers.tofu
+├── encryption.tofu
 ├── main.tofu              # sops secrets, node data source
 ├── guards.tofu            # protected VMIDs + live foreign-VM lookup   [EDIT]
-├── vms.tofu               # inventory/ -> module.vm, for_each
+├── vms.tofu               # inventory/ -> module.vm-pve, for_each
 ├── variables.tofu         # fleet-wide defaults                        [EDIT]
 ├── outputs.tofu
-├── modules/vm/            # the contract: what a VM is
-├── cloud-init/
-│   ├── base.yaml.tftpl            # every VM gets this - the whole document
-│   └── base.runcmd.json.tftpl     # commands every VM runs
+├── modules/vm-pve/        # the contract: what a VM is
 ├── ansible/               # post-boot software
 │   ├── ansible.cfg
-│   ├── site.yaml                  # one hostvar-driven play
+│   ├── requirements.yml           # pinned collections (CI installs these)
+│   ├── site.yaml                  # base, then each VM's declared roles
 │   ├── inventory/tofu.py          # dynamic inventory from tofu output
-│   └── roles/<role>/              # nats_server, bun, claude, docker,
-│                                  # metafactory_arc
+│   └── roles/<role>/              # base (every VM), then nats_server, bun,
+│                                  # claude, docker, metafactory_arc
 ├── inventory/             # one YAML file per VM                       [EDIT]
-├── scripts/               # check-cloud-init.sh, check-ansible.sh,
+├── scripts/               # build-image.sh, check-ansible.sh,
 │                          # vm-fingerprint.sh
 ├── otel-lgtm/             # grafana/otel-lgtm observability stack      [EDIT]
 │                          # (docker compose; see its README.md)
@@ -89,28 +90,23 @@ same system that is running opentofu and ansible, but that is not required.
 
 ## Prerequisites
 
-- OpenTofu >= 1.10, `sops`, `age`, `ansible` (ansible-core >= 2.15;
-  `ansible-lint` optional), and (for the cloud-init check script)
-  `python3-yaml` and `cloud-init` on the workstation.
+Download and install on PATH, for example ~/.local/bin
 
 - OpenTofu, https://github.com/opentofu/opentofu/releases/tag/v1.12.6
 - sops, https://github.com/getsops/sops/releases/tag/v3.13.3
 - age, https://github.com/FiloSottile/age/releases/tag/v1.2.1
 - uv, https://github.com/astral-sh/uv/releases/tag/0.12.6
 
+- `libguestfs-tools` (Debian/Ubuntu package name) if you build the golden image there (see "Building the golden image"). On Arch Linux the package name is `libguestfs`.
+
 - A ProxMox VE node (built against 9.x) with:
-  - a datastore that allows the `snippets` content type (`local` by default;
-    lvmthin cannot hold snippets),
-  - an Ubuntu cloud image uploaded (e.g.
-    `local:iso/resolute-server-cloudimg-amd64-20260720.img`),
-  - an API token for provisioning, and root SSH access for snippet upload
-    (see Credentials below). Besides the usual `VM.*`/`Datastore.*`/`SDN.Use`
-    privileges, the token needs **`Datastore.Allocate` on the snippet
-    datastore** — the provider reads the storage config (`GET /storage/<id>`)
-    before uploading, and PVE gates that behind the full admin privilege.
-    Grant it via a role scoped to `/storage/<snippet-datastore>`, and give
-    that role the *complete* `Datastore.*` set: PVE ACLs on a specific path
-    override propagated ones instead of merging.
+  - a datastore that allows the **`import`** content type for the golden
+    image (`local` by default; `iso` will not do — PVE only imports a disk
+    from `images` or `import` content),
+  - a golden image uploaded (see "Building the golden image"), and
+  - an API token for provisioning, with the usual
+    `VM.*`/`Datastore.*`/`SDN.Use` privileges. That is the only credential
+    this project needs — nothing here has, or wants, SSH to the node.
 
 ## Setup
 
@@ -126,8 +122,7 @@ same system that is running opentofu and ansible, but that is not required.
    `secrets.enc.json` holds the ProxMox API token and the state passphrase
    (16 characters minimum). Once encrypted it is safe to commit.
 
-2. **API user, roles, and token.** As root on the node (adjust the snippet
-   datastore path if yours is not `local`):
+2. **API user, role, and token.** As root on the node:
 
    ```bash
    pveum user add opentofu-prov@pve --comment "OpenTofu provisioning (API token only)"
@@ -135,24 +130,60 @@ same system that is running opentofu and ansible, but that is not required.
    pveum role add OpenTofuProv -privs "Datastore.AllocateSpace,Datastore.AllocateTemplate,Datastore.Audit,Pool.Allocate,Pool.Audit,SDN.Audit,SDN.Use,Sys.AccessNetwork,Sys.Audit,Sys.Console,Sys.Modify,VM.Allocate,VM.Audit,VM.Clone,VM.Config.CDROM,VM.Config.CPU,VM.Config.Cloudinit,VM.Config.Disk,VM.Config.HWType,VM.Config.Memory,VM.Config.Network,VM.Config.Options,VM.GuestAgent.Unrestricted,VM.Migrate,VM.PowerMgmt"
    pveum acl modify / -user opentofu-prov@pve -role OpenTofuProv
 
-   # Scoped role for the snippet datastore; must carry the FULL Datastore.*
-   # set - an ACL on a specific path overrides the propagated role, it does
-   # not merge with it.
-   pveum role add OpenTofuSnippetStore -privs "Datastore.Allocate,Datastore.AllocateSpace,Datastore.AllocateTemplate,Datastore.Audit"
-   pveum acl modify /storage/local -user opentofu-prov@pve -role OpenTofuSnippetStore
-
    # privsep=0: the token inherits the user's ACLs. The secret prints ONCE -
    # it goes into secrets.enc.json (proxmox.api_token_secret).
    pveum user token add opentofu-prov@pve provisioning --privsep 0
    ```
 
-3. **Provisioning SSH key.** The ProxMox API has no snippets endpoint, so the
-   provider uploads cloud-init user-data over SSH as root:
+   `Datastore.AllocateTemplate` is what lets the same token upload the golden
+   image, so no second identity is needed.
 
-   ```bash
-   ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_pve -N ""
-   ssh-copy-id -i ~/.ssh/id_ed25519_pve.pub root@<your-node>
-   ```
+3. **Golden image.** Build and upload one before the first `tofu apply` — see
+   "Building the golden image". A stock cloud image will not do: it has no
+   guest agent, and apply blocks for the full 30-minute timeout waiting for an
+   address that never arrives.
+
+## Building the golden image
+
+Every VM's disk is imported from a golden image: an upstream Ubuntu cloud image
+with `qemu-guest-agent` baked in. The agent is the one thing ansible cannot
+install — `tofu apply` blocks until the agent reports an address, and the
+dynamic inventory reads that same address to connect at all — so it has to be
+present before first boot.
+
+`scripts/build-image.sh` does the whole job. On the machine that builds:
+
+```bash
+sudo apt install libguestfs-tools
+# libguestfs boots its appliance with the host kernel, which ships mode 0600
+sudo dpkg-statoverride --update --add root root 0644 /boot/vmlinuz-$(uname -r)
+sudo usermod -aG kvm "$USER"     # then log out and back in
+```
+
+The script's preflight checks each of those and names the fix if one is
+missing; without `kvm` it still works, just slowly under emulation. Then:
+
+```bash
+./scripts/build-image.sh --upload
+```
+
+which downloads the dated upstream serial, verifies it against that
+directory's `SHA256SUMS`, installs the agent with `virt-customize`, and uploads
+the result through the storage API as `import` content — the same token as
+everything else, no scp. It prints the `volid` to put in
+`cloud_image_file_id`. Build without `--upload`
+first if you want to inspect the image (`virt-df`, `guestfish --ro`).
+
+Options: `--serial YYYYMMDD` picks the upstream build (default is the one this
+repo currently pins), `--snapshot YYYYMMDDTHHMMSSZ` the snapshot.ubuntu.com
+instant the agent is installed from, and `--outdir` where to work (default
+`private/images/`, gitignored; budget ~2.5 GB).
+
+Rebuild when the upstream serial should move, then repoint
+`cloud_image_file_id` at the new file name. **Never overwrite an uploaded
+image**: the disk source is create-only, so a same-name replacement silently
+changes what a running VM was built from without any plan diff. Build a new
+name, repoint, and delete the old volume once nothing references it.
 
 ## Opentofu and Ansible startup
 
@@ -168,12 +199,12 @@ Note: Edit all the copied files with your specific data.
 - `tofu init` # the first init installs the providers
 - `tofu plan` # verify the output looks like what you expect
 
-Note: The `ssh_public_keys` in terraform.tfvars are the keys that reach the *VMs* 
-NOT the Proxmox VE provisioning key. Override any fleet defaults there too.
+Note: The `ssh_public_keys` in terraform.tfvars are the keys that reach the 
+*VMs*. Override any fleet defaults there too.
 
-## optel-lgtm startup
+## otel-lgtm startup
 
-- `cd optel-lgtm`
+- `cd otel-lgtm`
 - `cp .env.example .env`
 - `docker compose up -d`
 
@@ -201,55 +232,67 @@ NOT the Proxmox VE provisioning key. Override any fleet defaults there too.
 
 - **Add a VM:** create `inventory/<name>.yaml` (the file name becomes the VM
   name and hostname — DNS label rules apply) and `tofu apply`. See
-  `inventory/example.yaml` for every knob including snapshot pinning and
+  `inventory-example.yaml` for every knob including snapshot pinning and
   ansible roles.
-- **Remove a VM:** `git mv inventory/<name>.yaml inventory/destroy/` and
-  `tofu apply` — only `inventory/*.yaml` is scanned, so the spec stays in the
-  repo while the VM, its disk, and its snippet are destroyed. Moving it back
-  provisions a fresh VM (all guest data is gone). To keep a VM but power it
-  off, set `started: false` instead.
+- **Remove a VM:** `mv inventory/<name>.yaml inventory/destroy/` and
+  `tofu apply` — only `inventory/*.yaml` is scanned, so the spec stays on disk
+  while the VM and its disk are destroyed. Moving it back provisions a fresh
+  VM (all guest data is gone). To keep a VM but power it off, set
+  `started: false` instead. (Plain `mv`: this template gitignores
+  `inventory/*.yaml`, so `git mv` fails. A fork that tracks its own specs can
+  use `git mv`.)
 - **Install software:** list roles in the spec
   (`ansible_roles: [docker, ...]`) and run
   `ansible-playbook ansible/site.yaml [--limit <vm>]` — no plan diff, no
   recreation, idempotent (second run reports changed=0). Removing a role from
   the list does *not* uninstall it; clean removal is a rebuild.
-- **After touching anything under `cloud-init/`:** run
-  `./scripts/check-cloud-init.sh`. **Under `ansible/`:**
+- **After touching anything under `ansible/`:** run
   `./scripts/check-ansible.sh`.
 - **Prove a rebuild is identical:**
   `./scripts/vm-fingerprint.sh ubuntu@<ip> fingerprints/<name>.txt` captures
   the VM's environment (packages, apt config, enabled units, users, and the
   ansible-installed files — minus per-instance noise like host keys and
-  machine-id) into a tracked file. Capture, commit, destroy + reprovision,
-  re-run ansible, capture again to the same path: an empty `git diff` is the
-  proof.
+  machine-id). Capture, destroy + reprovision, re-run ansible, capture again
+  to the same path: an empty diff is the proof. `fingerprints/**` is
+  gitignored, so captures stay local unless you commit one deliberately.
 
 ## Fingerprints
 
-Short version of the command sequence to destroy, recreate, and validate the fingerprint assuming the inventory entry is for a VM called ubuntu-test at an IP of 10.0.0.50. 
-This test assumes the first build fingerprint was saved as fingerprints/ubuntu-test-build1.txt. Rebuilding the same configuration should be an empty diff.
+Short version of the command sequence to destroy, recreate, and validate the
+fingerprint, assuming an inventory entry for a VM called ubuntu-test at
+10.0.0.50. Capture to one path throughout and let `git diff` do the comparing;
+rebuilding the same configuration should produce no diff.
 
 **Important**: Always start a session with `source tofu.env`
 
 ```sh
 source tofu.env
-git mv inventory/ubuntu-test.yaml inventory/destroy/
+./scripts/vm-fingerprint.sh ubuntu@10.0.0.50 fingerprints/ubuntu-test.txt
+cp fingerprints/ubuntu-test.txt /tmp/baseline.txt
+
+mv inventory/ubuntu-test.yaml inventory/destroy/
 tofu apply
-git mv inventory/destroy/ubuntu-test.yaml inventory/
+mv inventory/destroy/ubuntu-test.yaml inventory/
 tofu apply
 ansible-playbook ansible/site.yaml --limit ubuntu-test
-./scripts/vm-fingerprint.sh ubuntu@10.0.0.50 fingerprints/ubuntu-test-build2.txt
-diff fingerprints/ubuntu-test-build1.txt fingerprints/ubuntu-test-build2.txt
+
+./scripts/vm-fingerprint.sh ubuntu@10.0.0.50 fingerprints/ubuntu-test.txt
+diff /tmp/baseline.txt fingerprints/ubuntu-test.txt   # empty = identical rebuild
 ```
 
-NOTE: The inventory/destroy directory name is intentional, so it is clear what the next "tofu apply" is expected to do.
+`fingerprints/**` and `inventory/*.yaml` are both gitignored, so this uses
+`cp`/`diff` and plain `mv` rather than `git add -f`/`git diff` and `git mv`.
+A fork that tracks its specs and captures can use the git forms throughout.
+
+NOTE: The inventory/destroy directory name is intentional, so it is clear what
+the next "tofu apply" is expected to do.
 
 ## Ansible
 
 Cloud-init is decided at first boot and reachable only by recreating the VM —
-that is the right place for identity, network, and the apt baseline, and the
-wrong place for software. Everything softer lives in `ansible/` and follows
-the same declarative grammar as the rest of the repo:
+that is the right place for identity and network, and the wrong place for
+anything else. Everything softer lives in `ansible/` and follows the same
+declarative grammar as the rest of the repo:
 
 - **Specs declare, roles implement.** `ansible_roles:` in a VM's YAML rides
   through the module into `tofu output -json vms`;
@@ -258,6 +301,14 @@ the same declarative grammar as the rest of the repo:
   `site.yaml` is a single play that `include_role`s each host's declared
   list, so adding a role never touches it, and a typo'd role name fails at
   `tofu plan` time via a `fileexists()` validation in the spec contract.
+- **The `base` role is implicit.** No spec lists it and none can opt out:
+  `site.yaml` applies it to every host via `roles:`, ahead of the include
+  loop. It owns the apt snapshot pin, the `APT::Periodic` zeros, the masked
+  apt-daily timers, key-only SSH, the timezone, and the spec's `packages:` —
+  the baseline that used to be cloud-init's, now re-appliable to a running VM.
+- **Collections are pinned** in `ansible/requirements.yml`, and CI installs
+  from it. `ansible-core` ships none, so a `community.*` task without an entry
+  there passes locally and fails in CI.
 - **Role names use underscores** (`nats_server`, not `nats-server`): they
   double as Ansible group names, which must be valid identifiers.
 - **Every download is verified, every version pinned** in the role's
@@ -281,22 +332,26 @@ the same declarative grammar as the rest of the repo:
 
 ## Credentials
 
-Deliberately separate identities, one job each:
+Two credentials, one job each:
 
 | Credential | Authenticates to | Used for |
 |---|---|---|
-| API token (in `secrets.enc.json`) | ProxMox API | everything except snippet upload |
-| `id_ed25519_pve` | `root@<node>` | snippet upload only |
+| API token (in `secrets.enc.json`) | ProxMox API | provisioning, and uploading the golden image |
 | `ssh_public_keys` (tfvars) | `<ci_user>@<vm>` | reaching the VMs |
 
-The provisioning key is root on the hypervisor and exists only to upload YAML
-files; keeping it out of the VMs means a compromised VM never saw the key that
-owns the hypervisor. The API identity (`@pve` realm) is not a Linux account and
-can never be the SSH identity — that split is structural, not a choice.
+There is deliberately no hypervisor SSH credential. One used to exist, because
+the ProxMox API has no snippets endpoint and the provider fell back to SSH as
+root to upload cloud-init user-data. Removing the snippet removed the reason:
+every call this project makes is now an API call carrying the token, and a
+compromised workstation cannot reach root on the node through anything here.
+
+The API identity lives in the `@pve` realm, which is not a Linux account, so it
+could never have been the SSH identity — that split was structural, and is now
+simply absent.
 
 ## Protecting pre-existing VMs
 
-Three plan-time layers in `guards.tofu` + `modules/vm/main.tofu`
+Three plan-time layers in `guards.tofu` + `modules/vm-pve/main.tofu`
 (preconditions, not `check` blocks — they fail the plan rather than warn):
 
 1. **VMID floor** — managed VMs live at or above `managed_vmid_min`.
@@ -323,23 +378,28 @@ one guard OpenTofu genuinely cannot bypass.
   co-exist for different test setups. Baseline = manifest, delta = inventory
   `packages:`, delta versions = `archive_snapshot` — the whole environment is
   specified without booting anything.
-- Ubuntu cloud images ship apt *sources* but not package *indexes*; cloud-init
-  refreshes indexes automatically whenever `packages:` is non-empty, so
-  installs work regardless of `package_update`/`package_upgrade`.
+- Ubuntu cloud images ship apt *sources* but not package *indexes*; the base
+  role refreshes them (`update_cache: true`) before installing, so the spec's
+  `packages:` resolve against the pin.
 - **unattended-upgrades is disabled on every VM** (the image ships it
-  enabled). Base zeroes the `APT::Periodic` jobs via `bootcmd` and disables
-  the apt-daily timers at first boot — a test environment must not change
-  itself. Remove those lines from `base.yaml.tftpl` /
-  `base.runcmd.json.tftpl` if you *want* automatic security updates.
-- `archive_snapshot:` writes `APT::Snapshot "<ts>";` to apt.conf.d via
-  `bootcmd` (init stage — before apt configures sources and installs packages;
-  re-applied every boot, so later manual `apt install` stays pinned). An
-  apt.conf.d file survives cloud-init regenerating `ubuntu.sources`.
-- Changing a cloud-init template does **not** diff existing VMs (the snippet
-  ID is name-based and unchanged); template changes reach a VM only by
-  recreating it.
+  enabled). The base role zeroes the `APT::Periodic` jobs and *masks* the
+  apt-daily timers — masked rather than merely disabled, because a package
+  postinst re-running `systemctl preset` can undo a disable, and a test
+  environment must not change itself. Drop those tasks from
+  `ansible/roles/base/tasks/main.yaml` if you *want* automatic updates.
+- `archive_snapshot:` writes `APT::Snapshot "<ts>";` to apt.conf.d from the
+  base role, before it installs anything, so the pin is in force for the
+  spec's own packages and for any later manual `apt install`. An apt.conf.d
+  file survives cloud-init regenerating `ubuntu.sources`.
+- **What reaches a running VM, and what does not.** `packages:`,
+  `archive_snapshot:`, `ci_timezone` and every `ansible_roles` entry are
+  applied by ansible, so editing them and re-running the playbook is enough.
+  `package_upgrade` is the exception: it becomes PVE's `ciupgrade`, which
+  cloud-init reads on first boot only, so changing it reaches new VMs only.
 - The disk's image reference is create-only (`ignore_changes`): bumping
-  `cloud_image_file_id` affects new VMs, never existing ones.
+  `cloud_image_file_id` affects new VMs, never existing ones. That is also why
+  an uploaded image must never be replaced in place — same name, different
+  bytes, no plan diff.
 
 ## Rotating the state passphrase
 

@@ -1,4 +1,4 @@
-# modules/vm/variables.tofu
+# modules/vm-pve/variables.tofu
 
 variable "vm_name" {
   description = "VM name, also used as the guest hostname. Comes from the inventory file name."
@@ -28,21 +28,27 @@ variable "spec" {
     dns_servers = optional(list(string), [])
     dns_domain  = optional(string)
     vlan_id     = optional(number)
-    packages    = optional(list(string), [])
     tags        = optional(list(string), [])
-    started     = optional(bool, true)
-    on_boot     = optional(bool, false)
 
-    # snapshot.ubuntu.com ID (YYYYMMDDTHHMMSSZ). When set, apt on the guest is
-    # pinned to the archive as of that instant for the VM's whole life, so
-    # package installs are reproducible. Third-party repos (e.g. docker) have
-    # no snapshot service and are not covered.
+    # apt packages, installed by the ansible base role rather than by
+    # cloud-init, so editing this list reaches an existing VM on the next
+    # ansible-playbook run. Removing an entry does not uninstall it.
+    packages = optional(list(string), [])
+    started  = optional(bool, true)
+    on_boot  = optional(bool, false)
+
+    # snapshot.ubuntu.com ID (YYYYMMDDTHHMMSSZ). When set, the ansible base
+    # role pins apt on the guest to the archive as of that instant, so package
+    # installs are reproducible. Third-party repos (e.g. docker) have no
+    # snapshot service and are not covered. Independent of the snapshot the
+    # golden image itself was built against.
     archive_snapshot = optional(string)
 
+    # Drives PVE's ciupgrade, i.e. cloud-init's package_upgrade on first boot.
     # Default false: with a fixed base image, skipping the upgrade is what
     # keeps environments identical over time (and first boot much faster).
-    # true is also deterministic when archive_snapshot is set - the base
-    # upgrades to the pinned date instead of to "now".
+    # Note this one is first-boot only - unlike packages above, flipping it
+    # later does not reach an existing VM.
     package_upgrade = optional(bool, false)
 
     # Ansible roles under ansible/roles/ applied post-boot (layer 2). Unlike
@@ -65,6 +71,13 @@ variable "spec" {
   validation {
     condition     = var.spec.ipv4 == "dhcp" || can(cidrhost(var.spec.ipv4, 0))
     error_message = "spec.ipv4 must be 'dhcp' or CIDR notation like 10.0.0.50/24; a bare address would pass the plan and fail at the API."
+  }
+
+  validation {
+    condition = alltrue([
+      for p in var.spec.packages : can(regex("^[a-z0-9][a-z0-9+._-]*$", p))
+    ])
+    error_message = "each spec.packages entry must be a plain apt package name (lowercase letters, digits, and + . _ -). Anything else is a typo or an attempt to smuggle apt arguments through the inventory."
   }
 
   validation {
@@ -91,11 +104,6 @@ variable "spec" {
   }
 }
 
-variable "cloud_init_dir" {
-  description = "Directory holding the cloud-init templates. Passed in so the module does not reach out with ../.."
-  type        = string
-}
-
 variable "ansible_dir" {
   description = "Directory holding ansible/roles/. Passed in so the module does not reach out with ../.."
   type        = string
@@ -107,12 +115,7 @@ variable "pve_node" {
 }
 
 variable "cloud_image_file_id" {
-  description = "Datastore reference to the cloud image used as the disk source."
-  type        = string
-}
-
-variable "snippet_datastore" {
-  description = "Datastore holding cloud-init snippets. Must have the 'snippets' content type."
+  description = "Datastore reference to the golden cloud image used as the disk source, built by scripts/build-image.sh. It carries qemu-guest-agent, without which apply blocks until the 30m agent timeout."
   type        = string
 }
 
@@ -137,12 +140,7 @@ variable "ssh_public_keys" {
 }
 
 variable "ci_user" {
-  description = "Login account created by cloud-init."
-  type        = string
-}
-
-variable "ci_timezone" {
-  description = "Timezone applied by cloud-init."
+  description = "Login account. Becomes PVE's ciuser, which cloud-init renames the image's default user to."
   type        = string
 }
 

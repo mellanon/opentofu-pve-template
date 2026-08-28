@@ -227,7 +227,19 @@ section "base image"
 [ -e /etc/cloud/build.info ] && cat /etc/cloud/build.info
 
 section "cloud-init"
-cloud-init status
+# NOT a bare `cloud-init status`: it exits 2 when the boot finished with
+# recoverable errors ("degraded done"), and under the set -eu at the top of
+# this remote script that silently aborted the whole capture. Degraded is the
+# steady state on the proxmox path, because the user-data PVE generates still
+# uses the top-level `user:` key, deprecated in cloud-init 22.2. Nothing in
+# this repo emits that key and nothing here can suppress it.
+#
+# So record the long form, which names the degradation, rather than the bare
+# status line, which says "done" either way. If PVE ever stops emitting the
+# deprecated key, that shows up here as a diff instead of looking identical.
+# last_update is dropped: it is a timestamp, and this capture has to be
+# byte-stable across rebuilds.
+cloud-init status --long | grep -vE "^last_update:" || true
 # v1.platform is the datasource discriminator: nocloud on the proxmox path,
 # ec2 on the aws one. Verified against a real VM rather than guessed - the
 # first version of this line asked for v1.datasource, which is not a key.
