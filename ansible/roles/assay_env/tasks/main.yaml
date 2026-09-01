@@ -23,6 +23,12 @@
 # The capture itself is never registered as content. It carries the login
 # user's authorized_keys and the sshd drop-ins; only the four-line DIGESTS
 # tail the script prints to stderr is read back.
+#
+# FAIL CLOSED. Capture, parse and the digest guard run inside a block whose
+# rescue REMOVES {{ assay_env_file }} before failing. Refusing to write is not
+# enough on a re-run: a file from an earlier run is still sitting on a machine
+# that may have moved since, and that file is what assay believes. An identity
+# this run could not confirm is withdrawn rather than left standing.
 
 - name: Refuse to capture without a capture path
   ansible.builtin.fail:
@@ -33,11 +39,18 @@
       registered output. Point it at a path under fingerprints/ (gitignored).
   when: assay_env_capture_path | default('', true) | length == 0
 
+# check_mode: false on both control-node tasks - this one and the capture.
+# Neither writes anything to the guest: the stat reads the operator's own
+# checkout, and the capture reads the guest over SSH and writes only into the
+# operator's gitignored overlay. Skipped under --check they would leave the
+# parse with nothing, and the run would die on an empty digest set instead of
+# showing the honest diff for the file that is actually at stake.
 - name: Probe for the capture script on the control node
   ansible.builtin.stat:
     path: "{{ assay_env_fingerprint_script }}"
   delegate_to: localhost
   become: false
+  check_mode: false
   register: assay_env_script
 
 - name: Refuse to continue without the capture script
@@ -58,50 +71,87 @@
       has to set them too.
   when: ansible_user is not defined or ansible_host is not defined
 
-# changed_when: false because this reports nothing about the guest changing.
-# It only reads the guest, and writes on the control node - into the
-# operator's private overlay, which is not the fleet's state. The one task
-# here allowed to report changed is the copy at the end, which is the file
-# assay actually reads.
-- name: Capture the guest's fingerprint from the control node
-  ansible.builtin.command:
-    argv:
-      - "{{ assay_env_fingerprint_script }}"
-      - "{{ ansible_user }}@{{ ansible_host }}"
-      - "{{ assay_env_capture_path }}"
-  delegate_to: localhost
-  become: false
-  changed_when: false
-  register: assay_env_capture
+- name: Establish the machine's identity, or withdraw the one on file
+  block:
+    # changed_when: false because this reports nothing about the guest
+    # changing. It only reads the guest, and writes on the control node -
+    # into the operator's private overlay, which is not the fleet's state.
+    # The one task here allowed to report changed is the copy at the end,
+    # which is the file assay actually reads.
+    - name: Capture the guest's fingerprint from the control node
+      ansible.builtin.command:
+        argv:
+          - "{{ assay_env_fingerprint_script }}"
+          - "{{ ansible_user }}@{{ ansible_host }}"
+          - "{{ assay_env_capture_path }}"
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      check_mode: false
+      register: assay_env_capture
 
-# With an outfile given, the script writes the capture to that file and
-# prints only `fingerprint written to <path>` plus `tail -4` of it on stderr
-# - the ##### DIGESTS ##### header and its three lines. That tail is what is
-# parsed, so the capture body is never held in a variable. select() keeps
-# only well-formed digest lines, so ssh noise on the same stream cannot be
-# mistaken for one, and a truncated hash is not a match rather than a match
-# on a truncated hash.
-- name: Extract the digests from the capture's DIGESTS block
-  ansible.builtin.set_fact:
-    assay_env_digests: >-
-      {{
-        dict(assay_env_capture.stderr_lines
-             | select('match', '^(core|provider|combined)\s+sha256:[0-9a-f]{64}$')
-             | map('split'))
-      }}
+    # With an outfile given, the script writes the capture to that file and
+    # prints only `fingerprint written to <path>` plus `tail -4` of it on
+    # stderr - the ##### DIGESTS ##### header and its three lines. That tail
+    # is what is parsed, so the capture body is never held in a variable.
+    # select() keeps only well-formed digest lines, so ssh noise on the same
+    # stream cannot be mistaken for one, and a truncated hash is not a match
+    # rather than a match on a truncated hash.
+    - name: Extract the digests from the capture's DIGESTS block
+      ansible.builtin.set_fact:
+        assay_env_digests: >-
+          {{
+            dict(assay_env_capture.stderr_lines
+                 | select('match', '^(core|provider|combined)\s+sha256:[0-9a-f]{64}$')
+                 | map('split'))
+          }}
 
-- name: Refuse to write a partial environment file
-  ansible.builtin.fail:
-    msg: >-
-      The capture did not yield all three digests
-      (found: {{ assay_env_digests.keys() | list | sort | join(', ') | default('none', true) }}).
-      Nothing has been written to {{ assay_env_file }} - a file naming a
-      digest that was never computed is worse than no file, because assay
-      believes it. Inspect {{ assay_env_capture_path }}.
-  when: >-
-    'core' not in assay_env_digests
-    or 'provider' not in assay_env_digests
-    or 'combined' not in assay_env_digests
+    - name: Refuse to write a partial environment file
+      ansible.builtin.fail:
+        msg: >-
+          The capture did not yield all three digests
+          (found: {{ assay_env_digests.keys() | list | sort | join(', ') | default('none', true) }}).
+          A file naming a digest that was never computed is worse than no
+          file, because assay believes it. Inspect
+          {{ assay_env_capture_path }}.
+      when: >-
+        'core' not in assay_env_digests
+        or 'provider' not in assay_env_digests
+        or 'combined' not in assay_env_digests
+
+  rescue:
+    # The machine keeps no identity this run could not confirm. Absent when
+    # there was nothing to remove, so `changed` below distinguishes "an
+    # identity was withdrawn" from "there was never one".
+    - name: Withdraw any environment file an earlier run left behind
+      ansible.builtin.file:
+        path: "{{ assay_env_file }}"
+        state: absent
+      become: true
+      register: assay_env_withdrawn
+
+    # One task, not two guarded by `when: ... .changed` - that idiom reads as
+    # a missing handler to ansible-lint (no-handler), and a handler is exactly
+    # what this must not be: it has to fail the play, now, on this host.
+    - name: Refuse to leave the machine holding an unconfirmed identity
+      ansible.builtin.fail:
+        msg: >-
+          Fingerprinting failed at "{{ ansible_failed_task.name }}":
+          {{ ansible_failed_result.msg | default('no message given') }}
+          {{
+          'The environment file an earlier run wrote at ' ~ assay_env_file ~
+          ' has been REMOVED. It described a machine this run could not
+          confirm, and a stale identity is worse than none: assay reports
+          env@none for a machine with no file, which is a true statement,
+          where it would otherwise have reported a digest nothing had just
+          verified.'
+          if assay_env_withdrawn.changed else
+          'No environment file was present at ' ~ assay_env_file ~ ' and
+          none has been written, so the machine presents no identity at all
+          and assay will report env@none for it.'
+          }}
+          Fix the capture and re-run to restore it; the capture is at
+          {{ assay_env_capture_path }}.
 
 - name: Create the interchange directory
   ansible.builtin.file:

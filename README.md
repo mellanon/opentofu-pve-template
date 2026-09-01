@@ -333,9 +333,12 @@ declarative grammar as the rest of the repo:
   `/etc/assay/environment.json` — the interchange
   [assay](https://github.com/the-metafactory/assay/blob/main/environments/README.md)
   reads to learn which environment a result was produced under. It and `docker`
-  are the only roles using `become`; a missing or malformed digest fails the
-  role before anything is written, because a file naming a digest that was
-  never computed is worse than no file. The capture lands under gitignored
+  are the only *spec-declared* roles using `become` — the implicit `base` role
+  uses it throughout. A missing or malformed digest fails the role before
+  anything is written, and revokes any environment file an earlier run left
+  behind: a file naming a digest that was never computed is worse than no
+  file, and so is one naming a digest this run could not confirm. The capture
+  lands under gitignored
   `fingerprints/` and is never registered as content — it carries the guest's
   `authorized_keys`.
 - **Host-key checking is off** in `ansible.cfg` (same stance as
