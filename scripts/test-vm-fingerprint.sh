@@ -115,7 +115,7 @@ else
 fi
 
 # The software under test must not be inside the environment digest. It can
-# get in by two doors, and each needs its own prune:
+# get in by three doors, and each needs its own prune:
 #
 #   arc installs packages into ~/.local/share/metafactory/arc/repos, so
 #   without a prune the layer2 file hash folds the target-s git SHA into the
@@ -128,6 +128,16 @@ fi
 #   pruned. The shim dir is therefore pruned wholesale - see the reasoning
 #   block above the find passes in the remote script for why wholesale and
 #   not arc-owned-only, and for what that costs.
+#
+#   an arc-installed target then runs `bun install` for its own dependencies,
+#   which extracts package trees into ~/.bun/install/cache. Those trees are
+#   the target-s dependency closure, not the environment, and they are
+#   transitively unpinned besides - so the cache is pruned wholesale, blobs
+#   and extracted trees alike. The assertion below used to say the opposite,
+#   that "extracted cache trees are still covered". That was right only while
+#   bun itself was the only thing growing the directory; once layer-3 targets
+#   grow it, keeping the trees puts the software under test back inside the
+#   CORE digest through a third door.
 #
 # Two checks per prune, because neither alone is enough: the first proves the
 # prune is still written into both find passes, the second proves the
@@ -143,11 +153,39 @@ check   "both layer2 find passes prune the metafactory data dir" \
 bin_prunes="$(grep -c -- '-path "\$d/bin" -prune' "$fingerprint" || true)"
 check   "both layer2 find passes prune the shim dir" \
         "2" "$bin_prunes"
+# shellcheck disable=SC2016
+cache_prunes="$(grep -c -- '-path "\$d/install/cache" -prune' "$fingerprint" || true)"
+check   "both layer2 find passes prune the bun install cache" \
+        "2" "$cache_prunes"
+# The old extension-only prune must be gone from the CODE, not merely joined by
+# the new one: left behind, it would still pass the count check above while
+# implying the extracted trees are a separate, still-covered case. Comments are
+# stripped because the prose above the find passes quotes the old expression by
+# name to explain why it went - a check that counts its own explanation is not
+# a check.
+# shellcheck disable=SC2016
+old_prunes="$(grep -vE '^[[:space:]]*#' "$fingerprint" | grep -c -- 'install/cache/\*\.npm' || true)"
+check   "the old extension-only .npm prune is gone from the code" \
+        "0" "$old_prunes"
+# Order matters inside each pass, and the substring grep above cannot see it.
+# Written as `-type f -path "$d/install/cache" -prune`, the clause is false for
+# every file under the cache - -path names the directory, not the files under
+# it - so the prune never fires, every cache file falls through to -print0,
+# and the substring the check above looks for is still right there in the
+# line. That exact reorder passed every other check in this file, including
+# the executing one below, because the executing check runs this file-s own
+# copy of the expression rather than the remote script-s. This check is what
+# reads the remote script, so it is the one that catches the reorder there.
+# shellcheck disable=SC2016
+reordered="$(grep -vE '^[[:space:]]*#' "$fingerprint" | grep -c -- '-type f -path "\$d/install/cache"' || true)"
+check   "the cache prune is never reordered behind -type f" \
+        "0" "$reordered"
 
 tree="$work/home"
 mkdir -p "$tree/.local/bin" "$tree/.local/state" \
          "$tree/.local/share/metafactory/arc/repos/cortex" \
-         "$tree/.bun/install/cache"
+         "$tree/.bun/install/cache/somepkg@1.0.0" \
+         "$tree/.bun/install/global/node_modules"
 : >"$tree/.local/bin/nats-server"
 # What an arc CLI shim for an installed target actually looks like on disk:
 # a regular 0755 file, no arc header, no marker this script could match -
@@ -161,13 +199,21 @@ chmod 0755 "$tree/.local/bin/cortex"
 : >"$tree/.local/state/claude.lock"
 : >"$tree/.local/share/metafactory/arc/repos/cortex/index.ts"
 : >"$tree/.bun/install/cache/pkg.npm"
-: >"$tree/.bun/install/cache/extracted.js"
+# An extracted dependency tree, laid out the way bun actually writes one -
+# <name>@<version> beside the compressed blob. A layer-3 target running
+# `bun install` is what puts trees like this here.
+: >"$tree/.bun/install/cache/somepkg@1.0.0/file.js"
+# Positive control for the scope of the cache prune: install/global is a
+# sibling of install/cache, and pruning install itself by mistake would take
+# the globally installed package set out of the listing with no check going
+# red. This one goes red.
+: >"$tree/.bun/install/global/node_modules/.keep"
 
 listing="$(
   cd "$tree" || exit 1
   for d in .local .bun; do
     [ -d "$d" ] || continue
-    find "$d" -path "$d/state" -prune -o -path "$d/share/metafactory" -prune -o -path "$d/bin" -prune -o ! -path "$d/install/cache/*.npm" -print
+    find "$d" -path "$d/state" -prune -o -path "$d/share/metafactory" -prune -o -path "$d/bin" -prune -o -path "$d/install/cache" -prune -o -print
   done | sort
 )"
 
@@ -180,7 +226,58 @@ check   "the shim dir is pruned wholesale, tooling shims included" \
         "no"  "$(seen 'bin/nats-server')"
 check   ".local/state is still excluded"      "no"  "$(seen 'state/claude.lock')"
 check   "compressed .npm blobs are still excluded" "no"  "$(seen 'pkg.npm')"
-check   "extracted cache trees are still covered"  "yes" "$(seen 'extracted.js')"
+check   "extracted cache trees are excluded too"   "no"  "$(seen 'somepkg@1.0.0/file.js')"
+check   "the install cache dir itself is excluded" "no"  "$(seen 'install/cache')"
+check   "the prune stops at cache: install/global stays" \
+        "yes" "$(seen 'install/global/node_modules')"
+
+# The checks above execute the LISTING pass only. That is not enough, and the
+# gap is not hypothetical: the hashing pass is a SEPARATE find expression, and
+# the grep checks match a substring that survives reordering. Move the -type f
+# ahead of the prune -
+#
+#   -o -type f -path "$d/install/cache" -prune -o -type f -print0
+#
+# - and the prune silently stops pruning. For a FILE under the cache, -type f
+# is true but -path "$d/install/cache" is false (that path names the dir, not
+# the file), so the whole and-clause fails and the file falls through to
+# -print0 and gets hashed. For the cache DIR, -type f is false, so find never
+# prunes it and descends anyway. Every cache file lands back in the CORE
+# digest, while the grep above still matches and every listing check stays
+# green. So the hashing pass gets executed too, against the same tree.
+#
+# The expression below is a verbatim copy of the second find pass in the
+# remote script - if you change it there, change it here. Verbatim is the
+# point: paraphrasing it would test a paraphrase, and this check exists
+# precisely because the two passes can drift apart.
+#
+# sha256sum is a GNU coreutils name and is not on every macOS. Shim it rather
+# than rewrite the expression, so the copy stays byte-faithful to the remote.
+shim="$work/shim"
+mkdir -p "$shim"
+if ! command -v sha256sum >/dev/null 2>&1; then
+  printf '#!/bin/sh\nexec shasum -a 256 "$@"\n' >"$shim/sha256sum"
+  chmod 0755 "$shim/sha256sum"
+fi
+
+hashes="$(
+  cd "$tree" || exit 1
+  PATH="$shim:$PATH"
+  for d in .local .bun; do
+    [ -d "$d" ] || continue
+    find "$d" -path "$d/state" -prune -o -path "$d/share/metafactory" -prune -o -path "$d/bin" -prune -o -path "$d/install/cache" -prune -o -type f -print0 | xargs -0 -r sha256sum
+  done | sort -k2
+)"
+
+hashed() { printf '%s\n' "$hashes" | grep -q "$1" && echo yes || echo no; }
+check   "the HASHING pass does not hash extracted cache trees" \
+        "no"  "$(hashed 'somepkg@1.0.0/file.js')"
+check   "the HASHING pass does not hash .npm blobs" \
+        "no"  "$(hashed 'pkg.npm')"
+# Control: without this, all three checks would pass on an expression that
+# hashes nothing at all - a typo in the find could look like a clean prune.
+check   "the HASHING pass still hashes what it should" \
+        "yes" "$(hashed 'install/global/node_modules/.keep')"
 
 # Pruning bin wholesale trades its hashes for the version section, so that
 # section is now the only place the layer-2 tooling identity survives. These
