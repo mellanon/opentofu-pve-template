@@ -34,11 +34,48 @@ ipv4: dhcp
 # in list order - metafactory_arc needs bun before it. Cross-layer deps: the
 # bun role needs 'unzip' and metafactory_arc needs 'git' in packages.
 #
+# metafactory_cortex installs the software under test at an exact commit and
+# then proves the commit took. It needs metafactory_arc before it, and it
+# goes before assay_env: the target is not part of the environment's
+# identity, so the capture excludes it either way, but installing the target
+# and then fingerprinting is the order the runbook reads in.
+#
 # assay_env goes LAST. It installs nothing: it fingerprints whatever the roles
 # before it put on the machine and writes that identity to
 # /etc/assay/environment.json, so anything listed after it would be software
 # the recorded identity does not describe.
 #   packages: [unzip, git]
-#   ansible_roles: [nats_server, bun, claude, docker, metafactory_arc, assay_env]
+#   ansible_roles: [nats_server, bun, claude, docker, metafactory_arc, metafactory_cortex, assay_env]
+
+# The commit metafactory_cortex installs. The placeholder below is
+# deliberately not a real commit - it is well-formed (40 lowercase hex) so it
+# reaches the role's SHA check rather than tripping it, and obviously fake so
+# it cannot be mistaken for a considered choice. Replace it with a real
+# commit from the target repo:
+#
+#   git ls-remote https://github.com/the-metafactory/cortex main
+#
+# Full SHA only. The role rejects a tag or a branch: both can move, and a
+# target this fleet cannot name immutably is one whose test results cannot be
+# reproduced later.
+#
+#   metafactory_cortex_pin: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+#
+# NOTE - this key does NOT reach ansible from a VM spec today, and the line
+# above is an example of the VALUE, not a working spec entry. spec is a
+# strict object type (modules/vm-pve/variables.tofu) and ansible/inventory/
+# tofu.py builds hostvars from a fixed list (ansible_host, ansible_user,
+# vm_id, vm_ansible_roles, vm_packages, vm_archive_snapshot, vm_timezone).
+# A key that is in neither is dropped by OpenTofu's object conversion with no
+# error and no warning - verified against OpenTofu 1.11.7 - so writing it
+# here as a live key would document a lie. Until a spec passthrough exists,
+# supply it at run time:
+#
+#   ansible-playbook ansible/site.yaml --limit <host> \
+#     -e metafactory_cortex_pin=<40-char sha>
+#
+# or from ansible/inventory/host_vars/<host>.yaml. The role fails loudly when
+# it is unset, so a forgotten pin stops the run instead of installing
+# something nobody chose.
 
 tags: ["ubuntu"]

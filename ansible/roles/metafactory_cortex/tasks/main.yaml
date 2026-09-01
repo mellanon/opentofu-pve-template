@@ -1,0 +1,334 @@
+# Installs cortex - the software under test - at an exact commit, then proves
+# the commit took. Login user, no become: arc installs entirely under the
+# user's home, exactly like the metafactory_arc role it depends on. Depends on
+# metafactory_arc having run first - list metafactory_arc before
+# metafactory_cortex in ansible_roles.
+#
+# ORDERING relative to assay_env: cortex goes BEFORE it. assay_env is the
+# layer-2 capstone and records the environment's identity; the target is not
+# part of that identity (see the invariant below), so installing it first and
+# fingerprinting after is the ordering that matches the runbook, and the
+# recorded digest is the same either way.
+#
+# THE INVARIANT this role is written around: installing the target must not
+# move the CORE digest. An environment whose identity moved every time the
+# thing under test moved could not answer the one question the digest exists
+# for - "were these two runs performed under the same conditions?" - and
+# "same environment, two target versions" is the comparison the whole
+# exercise is built on. It holds because of where arc puts things and what
+# scripts/vm-fingerprint.sh refuses to look at:
+#
+#   ~/.local/share/metafactory/arc/repos/<pkg>   the clone (arc v0.45.0
+#       src/lib/paths.ts: reposDir = <XDG data>/metafactory/arc/repos on the
+#       default layout). vm-fingerprint.sh prunes `$d/share/metafactory`
+#       wholesale from the layer2 files trees.
+#   ~/.local/bin/<pkg>                           the CLI shim. Pruned
+#       wholesale as `$d/bin` (smithy#6 / crucible#14 option (a) - the shims
+#       carry no marker a prune could match, so the whole directory goes).
+#   ~/.config/metafactory/...                    arc's DB and config. Not in
+#       the capture at all: it walks only ~/.local and ~/.bun.
+#   ~/.claude/skills|agents|...                  arc's host drops. Same - not
+#       walked.
+#
+# So every path this role causes to appear is either pruned or never visited,
+# and the target is instead recorded by reference (name plus resolved commit)
+# in the run receipt, which is what metafactory_cortex_installed_commit below
+# is for. See the RESIDUAL note at the end of this file for the one edge that
+# is not this role's to close.
+#
+# THREE THINGS ABOUT arc v0.45.0 THAT SHAPE EVERY TASK BELOW, all read out of
+# the pinned source rather than assumed:
+#
+# 1. `arc install` REFUSES to run non-interactively without --yes. src/cli.ts
+#    guards on `!opts.yes && !process.stdin.isTTY` and exits 1 with "arc
+#    install requires an interactive terminal for capability confirmation".
+#    Ansible is never a TTY, so --yes is mandatory here, not a convenience.
+#
+# 2. cortex declares NON-optional secrets (GH_TOKEN, GITHUB_TOKEN in its
+#    arc-manifest.yaml). Without --skip-secrets, install tries to provision
+#    them, which is a prompt this role can neither answer nor see. It is also
+#    out of scope by construction: this role installs the target and stops.
+#    Configuring it - stack, secrets, bus - is a later layer. --skip-secrets
+#    leaves them unstored, and the cortex daemon says so clearly at first use.
+#
+# 3. --pin IS SILENTLY IGNORED WHEN THE PACKAGE IS ALREADY INSTALLED. This is
+#    the important one. src/commands/install.ts returns
+#    `{ success: true, alreadyInstalled: true }` from its duplicate guard as
+#    soon as an ACTIVE row with the same repo_url exists - before any clone -
+#    and the pin checkout (`checkoutPinnedRef`) sits further down, inside
+#    `if (!existsSync(installPath))`. So re-running with a DIFFERENT pin
+#    exits 0, changes nothing, and leaves the old commit in place. arc's
+#    README says "re-run `arc install --pin <ref>` to return to a specific
+#    ref"; at v0.45.0 that is not true for a package already installed.
+#
+#    That is a green run over stale input - the exact thing this factory
+#    exists to catch - so the role refuses instead: a checkout already at a
+#    different commit stops the play and names `arc remove`. It does not
+#    remove and reinstall on its own, because `arc remove` is destructive to
+#    whatever else that package is carrying and this role is not the right
+#    place to decide that unattended.
+#
+# WHY THE ASSERTION AT THE END IS NOT OPTIONAL: given (3), an install that
+# reports success is not evidence that the declared commit is on the disk. A
+# role that installs but cannot prove WHAT it installed is a healthy trace
+# over stale input. The role therefore reads the checkout's HEAD back with
+# git and fails, showing both commits, if it is not the declared one.
+
+- name: Refuse to install an unpinned target
+  ansible.builtin.assert:
+    that:
+      - metafactory_cortex_pin is defined
+      - metafactory_cortex_pin | default('', true) | string | length > 0
+    fail_msg: >-
+      metafactory_cortex_pin is not set. This role installs the software
+      under test, and the commit it installs is the claim every downstream
+      receipt reports (crucible DD-14/AC-3), so there is no default to fall
+      back to - a pin nobody chose would be worse than no install. Declare
+      the full commit SHA for the VM, e.g.
+      `-e metafactory_cortex_pin=<40-char sha>`, or in host_vars/group_vars.
+      See inventory-example.yaml for why the VM spec cannot carry it yet.
+    quiet: true
+
+# `| string` first: a pin written unquoted in YAML can arrive as a number
+# rather than text, and a regex test against a number is a different question
+# than the one being asked here.
+- name: Refuse a pin that is not a full commit SHA
+  ansible.builtin.assert:
+    that:
+      - metafactory_cortex_pin | string is match('^[0-9a-f]{40}$')
+    fail_msg: >-
+      metafactory_cortex_pin is "{{ metafactory_cortex_pin }}", which is not
+      a full 40-character lowercase commit SHA. arc's --pin would accept a
+      tag or a branch, but this repo does not identify what it installed by
+      anything mutable: a tag can be moved and a branch moves by design, and
+      either would make the commit in the run receipt unreproducible later.
+      Resolve the ref to its commit first (`git ls-remote
+      {{ metafactory_cortex_repo }} <ref>`) and declare that.
+    quiet: true
+
+# Probed by RUNNING arc, not by stat'ing the path.
+#
+# metafactory_arc installs arc with `bun link`, which leaves a SYMLINK in
+# ~/.bun/bin - and a stat of a symlink reports a DANGLING link as present.
+# That is not hypothetical: the first version of this task used stat, and on
+# a box whose bun global tree had been rebuilt underneath the link it sailed
+# through, handing the operator `[Errno 2] No such file or directory` from a
+# task three steps later instead of the refusal below. Executing arc also
+# proves the rest of the chain the install depends on in one go: the link
+# resolves, bun can run it, and the CLI answers.
+- name: Probe for arc (cross-role dependency)  # noqa: command-instead-of-module
+  ansible.builtin.command: "{{ metafactory_cortex_arc_bin }} --version"
+  environment:
+    PATH: "{{ ansible_facts['user_dir'] }}/.bun/bin:{{ ansible_facts['env']['PATH'] }}"
+  register: metafactory_cortex_arc_probe
+  changed_when: false
+  failed_when: false
+
+- name: Refuse to continue without a working arc
+  ansible.builtin.fail:
+    msg: >-
+      The metafactory_cortex role installs the target with arc, and
+      `{{ metafactory_cortex_arc_bin }} --version` did not answer
+      (rc={{ metafactory_cortex_arc_probe.rc | default('n/a') }}:
+      {{ metafactory_cortex_arc_probe.stderr | default(metafactory_cortex_arc_probe.msg | default(''), true) | trim }}).
+      List 'metafactory_arc' before 'metafactory_cortex' in the VM spec's
+      ansible_roles. If arc is installed somewhere else on this machine,
+      point metafactory_cortex_arc_bin at it.
+  when: metafactory_cortex_arc_probe.rc | default(1) != 0
+
+- name: Probe for git (layer-1 dependency)  # noqa: command-instead-of-module
+  ansible.builtin.command: git --version
+  register: metafactory_cortex_git_probe
+  changed_when: false
+  failed_when: false
+
+- name: Refuse to continue without git
+  ansible.builtin.fail:
+    msg: >-
+      The metafactory_cortex role needs git on the guest - arc clones the
+      target with it, and the pin assertion reads the checkout back with it;
+      add 'git' to the VM spec's packages list (layer 1) and reprovision, or
+      install it by hand.
+  when: metafactory_cortex_git_probe.rc | default(1) != 0
+
+# --- decide whether an install is needed -------------------------------
+#
+# `arc list --json` is a read of arc's local package DB - no network, unlike
+# `arc info`, which also fetches release notes. It reports installPath per
+# package, which is where the clone actually is; that is asked rather than
+# derived, because the path arc chooses depends on its layout resolution
+# (src/lib/paths.ts: the XDG split vs the legacy single tree, selected by
+# whether ARC_CONFIG_ROOT is in play) and a path this role hardcoded could
+# quietly stop matching.
+
+- name: Ask arc which packages it already has
+  ansible.builtin.command:
+    cmd: "{{ metafactory_cortex_arc_bin }} list --json"
+  environment:
+    PATH: "{{ ansible_facts['user_dir'] }}/.bun/bin:{{ ansible_facts['env']['PATH'] }}"
+  register: metafactory_cortex_list_before
+  changed_when: false
+
+- name: Note where arc says the target is checked out, if anywhere
+  ansible.builtin.set_fact:
+    metafactory_cortex_path_before: >-
+      {{
+        (metafactory_cortex_list_before.stdout | from_json).packages
+        | default([])
+        | selectattr('name', 'equalto', metafactory_cortex_package)
+        | selectattr('installPath', 'defined')
+        | map(attribute='installPath')
+        | list | first | default('', true)
+      }}
+
+# failed_when: false - a recorded package whose checkout is not a git repo is
+# a state this role has to report precisely, not die on with git's own error.
+- name: Read the HEAD of the checkout arc already has  # noqa: command-instead-of-module
+  ansible.builtin.command:
+    cmd: git rev-parse HEAD
+    chdir: "{{ metafactory_cortex_path_before }}"
+  register: metafactory_cortex_head_before
+  when: metafactory_cortex_path_before | length > 0
+  changed_when: false
+  failed_when: false
+
+# See point (3) in the header. Everything about arc's behaviour here is
+# "exit 0, change nothing", so the refusal has to happen on this side.
+- name: Refuse to re-pin a checkout arc will not move
+  ansible.builtin.fail:
+    msg: >-
+      {{ metafactory_cortex_package }} is already installed at
+      {{ metafactory_cortex_path_before }}, and its HEAD is
+      {{ metafactory_cortex_head_before.stdout | default('unreadable', true) | trim }}
+      where the VM declares {{ metafactory_cortex_pin }}.
+      arc will not correct that from here: at v0.45.0
+      `arc install --pin` short-circuits on an already-installed package and
+      returns success WITHOUT checking out the new ref, so re-running here
+      would report green and change nothing. Remove it first and re-run this
+      role - `arc remove {{ metafactory_cortex_package }}` - or, on a test
+      VM, destroy and re-provision, which is this fleet's normal reset.
+  when:
+    - metafactory_cortex_path_before | length > 0
+    - metafactory_cortex_head_before.rc | default(1) != 0
+      or (metafactory_cortex_head_before.stdout | default('', true) | trim) != metafactory_cortex_pin | string
+
+# Only reached when there is no checkout at all, which is also the only case
+# in which arc honours --pin. Re-running with the SAME pin skips this task
+# entirely, which is the role's idempotence claim: a second run reports zero
+# changes because there is nothing left to do, not because a command was
+# told to keep quiet.
+- name: Install the declared commit of {{ metafactory_cortex_package }}
+  ansible.builtin.command:
+    argv:
+      - "{{ metafactory_cortex_arc_bin }}"
+      - install
+      - "{{ metafactory_cortex_repo }}"
+      - --pin
+      - "{{ metafactory_cortex_pin | string }}"
+      - --yes
+      - --skip-secrets
+  environment:
+    PATH: "{{ ansible_facts['user_dir'] }}/.bun/bin:{{ ansible_facts['env']['PATH'] }}"
+  register: metafactory_cortex_install
+  when: metafactory_cortex_path_before | length == 0
+  changed_when: true
+
+# --- prove what actually landed ----------------------------------------
+#
+# Re-derived from arc rather than reusing anything measured above, so the
+# assertion stands on its own: it describes the disk as it is now, on both
+# the freshly-installed and the already-correct path.
+
+- name: Ask arc again where the target is checked out
+  ansible.builtin.command:
+    cmd: "{{ metafactory_cortex_arc_bin }} list --json"
+  environment:
+    PATH: "{{ ansible_facts['user_dir'] }}/.bun/bin:{{ ansible_facts['env']['PATH'] }}"
+  register: metafactory_cortex_list_after
+  changed_when: false
+
+- name: Note the installed checkout's path
+  ansible.builtin.set_fact:
+    metafactory_cortex_path: >-
+      {{
+        (metafactory_cortex_list_after.stdout | from_json).packages
+        | default([])
+        | selectattr('name', 'equalto', metafactory_cortex_package)
+        | selectattr('installPath', 'defined')
+        | map(attribute='installPath')
+        | list | first | default('', true)
+      }}
+
+- name: Refuse to report a commit for a checkout that is not there
+  ansible.builtin.fail:
+    msg: >-
+      arc reports no installed package named
+      '{{ metafactory_cortex_package }}' after the install step. Either the
+      install did not run, or the target's arc-manifest.yaml records a
+      different `name:` than this role expects - set
+      metafactory_cortex_package to match it. Nothing has been asserted
+      about this machine, so it holds no verified target commit.
+      arc install said: {{ metafactory_cortex_install.stdout | default('(the install step did not run)', true) }}
+  when: metafactory_cortex_path | length == 0
+
+- name: Read the installed checkout's HEAD  # noqa: command-instead-of-module
+  ansible.builtin.command:
+    cmd: git rev-parse HEAD
+    chdir: "{{ metafactory_cortex_path }}"
+  register: metafactory_cortex_head
+  changed_when: false
+
+# The assertion the whole role exists for. Both values are in the message on
+# purpose: "the pin did not take" is not actionable, and the commit that DID
+# land is the first thing anyone reading the failure needs.
+- name: Assert the installed commit is the declared pin
+  ansible.builtin.assert:
+    that:
+      - (metafactory_cortex_head.stdout | trim) == metafactory_cortex_pin | string
+    fail_msg: >-
+      The installed target is NOT at the declared commit.
+        declared (metafactory_cortex_pin): {{ metafactory_cortex_pin }}
+        installed (git rev-parse HEAD):    {{ metafactory_cortex_head.stdout | trim }}
+        checkout:                          {{ metafactory_cortex_path }}
+      Nothing downstream may report this machine as running the declared
+      commit. Inspect the checkout, or `arc remove
+      {{ metafactory_cortex_package }}` and re-run this role.
+    success_msg: >-
+      {{ metafactory_cortex_package }} is at {{ metafactory_cortex_pin }},
+      verified by git in {{ metafactory_cortex_path }}.
+    quiet: true
+
+# What the smoke loop reads. Set only after the assertion above, so the fact
+# exists on a host if and only if the commit was proved on that host - a fact
+# set before the check would be readable on a machine that failed it.
+- name: Record the verified commit for the smoke loop
+  ansible.builtin.set_fact:
+    metafactory_cortex_installed_commit: "{{ metafactory_cortex_head.stdout | trim }}"
+
+# --- RESIDUAL, stated rather than hidden -------------------------------
+#
+# Two things this role cannot close, both recorded so the next reader does
+# not have to re-derive them:
+#
+# 1. The digest invariant above holds for the PATHS arc writes, and those are
+#    all pruned or unvisited. It does NOT cover the PARENT directories:
+#    vm-fingerprint.sh prunes `.local/share/metafactory` and `.local/bin`,
+#    but `.local` and `.local/share` are themselves printed by the find that
+#    builds the layer2 files list. On a VM where neither already exists, the
+#    first arc install creates them and the CORE digest moves by exactly
+#    those two path lines. In the documented stack it cannot happen - the
+#    nats_server role creates ~/.local/bin and the claude role creates
+#    ~/.local/share/claude before anything gets here - so listing this role
+#    after either of them is enough. A spec that runs metafactory_arc and
+#    metafactory_cortex with neither of those roles is the one arrangement
+#    where a before/after capture would differ, and the difference would be
+#    two directory names, not the target's contents.
+#
+# 2. The pin fixes cortex's own commit and nothing else. cortex's
+#    arc-manifest.yaml declares depends_on.packages - five adapter/renderer
+#    repos - and arc installs those with `install({ repoUrl: dep.repo })`,
+#    passing no pinnedRef (src/commands/install.ts). They therefore land on
+#    whatever their default branch is at the time. That does not touch the
+#    core digest (same pruned tree) and does not affect the commit this role
+#    asserts, but the tree under reposDir is not fully determined by the pin,
+#    and a claim that it is would be wrong.

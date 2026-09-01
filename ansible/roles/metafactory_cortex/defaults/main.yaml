@@ -1,0 +1,43 @@
+# Knobs for installing cortex - the software under test. Everything here
+# decides WHICH code lands and how it is found again; none of it is the
+# environment's identity, and none of it is cortex's configuration (a stack,
+# secrets, NATS wiring are a later layer and deliberately out of this role).
+
+# Installed by URL, not by registry name.
+#
+# `arc install cortex` resolves the bare name through arc's default remote
+# source (arc v0.45.0 src/lib/sources.ts, createDefaultSources ->
+# DEFAULT_API_SOURCE): a network lookup against a name -> repo mapping that
+# lives outside this repo, outside the VM spec, and outside anyone's control
+# here. A URL plus a full commit SHA names the code completely and cannot be
+# repointed under us, which is the only way this factory is allowed to
+# identify the thing it is measuring.
+metafactory_cortex_repo: https://github.com/the-metafactory/cortex
+
+# Where the metafactory_arc role leaves the arc CLI. A variable rather than a
+# literal for two reasons: where arc's entry point lands is that role's
+# business and not this one's, and a role whose dependency probe cannot be
+# pointed somewhere else is a role whose refusal path cannot be exercised
+# without breaking the machine you are testing on.
+metafactory_cortex_arc_bin: "{{ ansible_facts['user_dir'] }}/.bun/bin/arc"
+
+# The name arc records for the package in its DB, which is the target's own
+# arc-manifest.yaml `name:`. Used ONLY to find the checkout again in
+# `arc list --json` output so the role can read its HEAD. It never selects
+# code - metafactory_cortex_repo does that.
+metafactory_cortex_package: cortex
+
+# metafactory_cortex_pin is deliberately NOT defined in this file.
+#
+# A default pin would be a lie about intent. It would let a VM spec that
+# names this role but forgets the pin install *something* anyway, and every
+# receipt downstream would then carry a commit nobody chose - which is the
+# precise failure this factory exists to prevent (crucible DD-14: the pin is
+# the claim under test, and AC-3 measures the installed commit against the
+# declared one). An absent pin has to stop the run, not fall back to a
+# neighbour's answer.
+#
+# tasks/main.yaml asserts it is set AND is a full 40-character commit SHA,
+# before any network call. Full SHA only, not a tag or branch: a tag can be
+# moved and a branch moves by design, and this repo does not identify an
+# environment - or what was installed into one - by anything mutable.
