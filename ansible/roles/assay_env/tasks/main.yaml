@@ -1,0 +1,142 @@
+# Writes /etc/assay/environment.json - the interchange assay reads to learn
+# which environment a corpus ran on (crucible spec 4a; the contract is assay's
+# environments/README.md). This is the layer-2 CAPSTONE: it fingerprints the
+# layers already installed, so it belongs LAST in a VM spec's ansible_roles,
+# after every tool role and before anything installs the software under test.
+#
+# The capture runs on the CONTROL node, not the guest: scripts/vm-fingerprint.sh
+# SSHes in and digests what it finds. So the first task is delegate_to:
+# localhost with become: false, and nothing is re-implemented on the VM.
+#
+# THE INVARIANT this role is written around: writing the environment file must
+# not move the core digest it records. It holds because of what the capture
+# does and does not look at - CORE covers os-release, hostname, timezone, the
+# dpkg set, three named /etc/apt/apt.conf.d files, the Types/Suites/Components/
+# Snapshot lines of /etc/apt/sources.list.d/*.sources, enabled units, the login
+# user, /etc/ssh/sshd_config.d/*.conf, /etc/docker/daemon.json, and the ~/.local
+# and ~/.bun file trees. /etc is never walked, only those enumerated paths are
+# read, and /etc/assay is not among them. The two modules below (file, copy)
+# touch nothing else: no package, no unit, no user, no group, no hostname, and
+# nothing under ~/.local or ~/.bun. Adding a task that does is how this role
+# starts lying about the machine it describes.
+#
+# The capture itself is never registered as content. It carries the login
+# user's authorized_keys and the sshd drop-ins; only the four-line DIGESTS
+# tail the script prints to stderr is read back.
+
+- name: Refuse to capture without a capture path
+  ansible.builtin.fail:
+    msg: >-
+      assay_env_capture_path is empty. Given no outfile,
+      scripts/vm-fingerprint.sh prints the whole capture on stdout, which
+      would put the guest's authorized_keys and sshd drop-ins into ansible's
+      registered output. Point it at a path under fingerprints/ (gitignored).
+  when: assay_env_capture_path | default('', true) | length == 0
+
+- name: Probe for the capture script on the control node
+  ansible.builtin.stat:
+    path: "{{ assay_env_fingerprint_script }}"
+  delegate_to: localhost
+  become: false
+  register: assay_env_script
+
+- name: Refuse to continue without the capture script
+  ansible.builtin.fail:
+    msg: >-
+      The assay_env role runs {{ assay_env_fingerprint_script }} from the
+      control node and it is not executable there. Run ansible-playbook from
+      a full checkout of this repo, or point assay_env_fingerprint_script at
+      one.
+  when: not (assay_env_script.stat.exists and assay_env_script.stat.executable)
+
+- name: Refuse to continue without an address and login user for the guest
+  ansible.builtin.fail:
+    msg: >-
+      The assay_env role addresses the guest as <ansible_user>@<ansible_host>
+      from the control node; one of those hostvars is missing. The dynamic
+      inventory (ansible/inventory/tofu.py) serves both - a static inventory
+      has to set them too.
+  when: ansible_user is not defined or ansible_host is not defined
+
+# changed_when: false because this reports nothing about the guest changing.
+# It only reads the guest, and writes on the control node - into the
+# operator's private overlay, which is not the fleet's state. The one task
+# here allowed to report changed is the copy at the end, which is the file
+# assay actually reads.
+- name: Capture the guest's fingerprint from the control node
+  ansible.builtin.command:
+    argv:
+      - "{{ assay_env_fingerprint_script }}"
+      - "{{ ansible_user }}@{{ ansible_host }}"
+      - "{{ assay_env_capture_path }}"
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  register: assay_env_capture
+
+# With an outfile given, the script writes the capture to that file and
+# prints only `fingerprint written to <path>` plus `tail -4` of it on stderr
+# - the ##### DIGESTS ##### header and its three lines. That tail is what is
+# parsed, so the capture body is never held in a variable. select() keeps
+# only well-formed digest lines, so ssh noise on the same stream cannot be
+# mistaken for one, and a truncated hash is not a match rather than a match
+# on a truncated hash.
+- name: Extract the digests from the capture's DIGESTS block
+  ansible.builtin.set_fact:
+    assay_env_digests: >-
+      {{
+        dict(assay_env_capture.stderr_lines
+             | select('match', '^(core|provider|combined)\s+sha256:[0-9a-f]{64}$')
+             | map('split'))
+      }}
+
+- name: Refuse to write a partial environment file
+  ansible.builtin.fail:
+    msg: >-
+      The capture did not yield all three digests
+      (found: {{ assay_env_digests.keys() | list | sort | join(', ') | default('none', true) }}).
+      Nothing has been written to {{ assay_env_file }} - a file naming a
+      digest that was never computed is worse than no file, because assay
+      believes it. Inspect {{ assay_env_capture_path }}.
+  when: >-
+    'core' not in assay_env_digests
+    or 'provider' not in assay_env_digests
+    or 'combined' not in assay_env_digests
+
+- name: Create the interchange directory
+  ansible.builtin.file:
+    path: "{{ assay_env_file | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
+# schema is the number 1, not the string "1": assay refuses a schema it does
+# not know, and "1" is not 1. Unquoted here, so it stays an int through
+# to_nice_json and lands in the file as a JSON number.
+#
+# combined is deliberately absent. It is a capture-side convenience for
+# diffing whole captures; the contract's fields are schema, core_digest,
+# provider_digest, provider and definition, and an extra key buys nothing.
+- name: Assemble the interchange document
+  ansible.builtin.set_fact:
+    assay_env_document:
+      schema: 1
+      core_digest: "{{ assay_env_digests.core }}"
+      provider_digest: "{{ assay_env_digests.provider }}"
+      provider: "{{ assay_env_provider }}"
+      definition: "{{ assay_env_definition }}"
+
+# copy reports changed only when the bytes differ, so a re-run on a machine
+# that has not moved is green and unchanged without a changed_when of its
+# own. That is the idempotence claim: the file follows the machine, not the
+# run.
+- name: Write the assay environment file
+  ansible.builtin.copy:
+    dest: "{{ assay_env_file }}"
+    content: "{{ assay_env_document | to_nice_json }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true

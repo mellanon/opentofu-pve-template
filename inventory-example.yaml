@@ -33,7 +33,12 @@ ipv4: dhcp
 # because an archive_snapshot cannot cover download.docker.com). Roles apply
 # in list order - metafactory_arc needs bun before it. Cross-layer deps: the
 # bun role needs 'unzip' and metafactory_arc needs 'git' in packages.
+#
+# assay_env goes LAST. It installs nothing: it fingerprints whatever the roles
+# before it put on the machine and writes that identity to
+# /etc/assay/environment.json, so anything listed after it would be software
+# the recorded identity does not describe.
 #   packages: [unzip, git]
-#   ansible_roles: [nats_server, bun, claude, docker, metafactory_arc]
+#   ansible_roles: [nats_server, bun, claude, docker, metafactory_arc, assay_env]
 
 tags: ["ubuntu"]
