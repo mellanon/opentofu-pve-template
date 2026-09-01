@@ -36,9 +36,18 @@ ipv4: dhcp
 #
 # metafactory_cortex installs the software under test at an exact commit and
 # then proves the commit took. It needs metafactory_arc before it, and it
-# goes before assay_env: the target is not part of the environment's
-# identity, so the capture excludes it either way, but installing the target
-# and then fingerprinting is the order the runbook reads in.
+# goes before assay_env, which is the order the runbook reads in: install the
+# target, then fingerprint.
+#
+# The target is not MEANT to be part of the environment's identity, and
+# everything arc writes for it is pruned from the capture - except one path.
+# ~/.bun/install/cache is still hashed into CORE and `bun install` populates
+# it, so today a capture taken after this role differs from one taken before.
+# See the header of ansible/roles/metafactory_cortex/tasks/main.yaml; the fix
+# belongs in scripts/vm-fingerprint.sh and is in flight upstream. Listing
+# `claude` before this role also matters: it is the only role that creates
+# both ~/.local and ~/.local/share, whose absence would otherwise move the
+# digest by a directory name on the first install.
 #
 # assay_env goes LAST. It installs nothing: it fingerprints whatever the roles
 # before it put on the machine and writes that identity to

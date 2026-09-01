@@ -8,15 +8,19 @@
 # layer-2 capstone and records the environment's identity; the target is not
 # part of that identity (see the invariant below), so installing it first and
 # fingerprinting after is the ordering that matches the runbook, and the
-# recorded digest is the same either way.
+# recorded digest is the same either way - subject to the caveat below,
+# which applies whichever order they run in.
 #
 # THE INVARIANT this role is written around: installing the target must not
 # move the CORE digest. An environment whose identity moved every time the
 # thing under test moved could not answer the one question the digest exists
 # for - "were these two runs performed under the same conditions?" - and
 # "same environment, two target versions" is the comparison the whole
-# exercise is built on. It holds because of where arc puts things and what
-# scripts/vm-fingerprint.sh refuses to look at:
+# exercise is built on. Most of what arc writes is already out of the
+# capture's reach, but ONE PATH BREAKS IT and the break is live - read both
+# halves below before trusting a digest taken around this role.
+#
+# Out of reach already:
 #
 #   ~/.local/share/metafactory/arc/repos/<pkg>   the clone (arc v0.45.0
 #       src/lib/paths.ts: reposDir = <XDG data>/metafactory/arc/repos on the
@@ -30,11 +34,38 @@
 #   ~/.claude/skills|agents|...                  arc's host drops. Same - not
 #       walked.
 #
-# So every path this role causes to appear is either pruned or never visited,
-# and the target is instead recorded by reference (name plus resolved commit)
-# in the run receipt, which is what metafactory_cortex_installed_commit below
-# is for. See the RESIDUAL note at the end of this file for the one edge that
-# is not this role's to close.
+# THE INVARIANT DOES NOT HOLD TODAY. Stated here rather than discovered by
+# whoever first diffs two captures:
+#
+#   ~/.bun/install/cache   IS hashed into CORE, and this install populates
+#       it. vm-fingerprint.sh excludes only `$d/install/cache/*.npm` - the
+#       compressed download blobs - and deliberately keeps the EXTRACTED
+#       package trees beside them ("are what global/node_modules symlinks
+#       into, and stay in"). arc runs `bun install` in the target's repo
+#       after landing symlinks (arc README, "If a package's repo root has a
+#       package.json with dependencies"), and cortex has a large dependency
+#       tree, so installing the target writes hundreds of extracted package
+#       directories straight into the hashed set. On this workstation the
+#       cache holds 154 `.npm` blobs (excluded) beside 614 other entries
+#       (hashed).
+#
+# So a capture taken before and after this role runs WILL differ in CORE
+# today, and the digest would move with the target's dependency tree - which
+# is precisely the coupling the split exists to prevent. The fix belongs in
+# vm-fingerprint.sh, above the seam, not here: prune `install/cache`
+# wholesale, the same call already made for `bin` and `share/metafactory`.
+# It is in flight upstream as fix/prune-bun-install-cache. Until that lands,
+# this role's digest-identity acceptance criterion (crucible#26: "a capture
+# taken before and after this role runs has an identical core digest") CANNOT
+# PASS, and nothing here can make it pass.
+#
+# What IS already true, and is what the fix completes rather than creates:
+# every path arc writes for the target itself is pruned or never visited, so
+# once the cache leak is closed the invariant holds without further work. The
+# target is recorded by reference (name plus resolved commit) in the run
+# receipt instead - which is what metafactory_cortex_installed_commit below
+# is for. See the RESIDUAL note at the end of this file for the remaining
+# edges.
 #
 # THREE THINGS ABOUT arc v0.45.0 THAT SHAPE EVERY TASK BELOW, all read out of
 # the pinned source rather than assumed:
@@ -92,10 +123,17 @@
 # `| string` first: a pin written unquoted in YAML can arrive as a number
 # rather than text, and a regex test against a number is a different question
 # than the one being asked here.
+#
+# `\Z`, not `$`. Ansible's `match` test is Python's re.match, where `$` also
+# matches immediately BEFORE a trailing newline - so a pin fed in from a
+# command substitution or a file read would pass this gate carrying a "\n",
+# and then fail the far less legible string comparison against
+# `git rev-parse` output at the foot of the role. `\Z` anchors at the true
+# end of the string and rejects it here, where the message can say why.
 - name: Refuse a pin that is not a full commit SHA
   ansible.builtin.assert:
     that:
-      - metafactory_cortex_pin | string is match('^[0-9a-f]{40}$')
+      - metafactory_cortex_pin | string is match('^[0-9a-f]{40}\Z')
     fail_msg: >-
       metafactory_cortex_pin is "{{ metafactory_cortex_pin }}", which is not
       a full 40-character lowercase commit SHA. arc's --pin would accept a
@@ -106,6 +144,17 @@
       {{ metafactory_cortex_repo }} <ref>`) and declare that.
     quiet: true
 
+# check_mode: false on every read-only task in this role - the two dependency
+# probes, both `arc list --json` reads, and the three git reads of the
+# checkout. None of them writes anything: they run --version, read arc's
+# local package DB, and read a git checkout's HEAD and status. Skipped under
+# --check they would leave the parse below with no stdout, and the run would
+# die on a from_json of the empty string instead of showing the honest
+# picture for the one task that IS at stake - the install, which stays
+# check-skipped and reports what it would do. A --check run therefore either
+# confirms the machine already holds the declared commit, or refuses for the
+# same reason a real run would.
+#
 # Probed by RUNNING arc, not by stat'ing the path.
 #
 # metafactory_arc installs arc with `bun link`, which leaves a SYMLINK in
@@ -123,6 +172,7 @@
   register: metafactory_cortex_arc_probe
   changed_when: false
   failed_when: false
+  check_mode: false
 
 - name: Refuse to continue without a working arc
   ansible.builtin.fail:
@@ -141,6 +191,7 @@
   register: metafactory_cortex_git_probe
   changed_when: false
   failed_when: false
+  check_mode: false
 
 - name: Refuse to continue without git
   ansible.builtin.fail:
@@ -168,6 +219,7 @@
     PATH: "{{ ansible_facts['user_dir'] }}/.bun/bin:{{ ansible_facts['env']['PATH'] }}"
   register: metafactory_cortex_list_before
   changed_when: false
+  check_mode: false
 
 - name: Note where arc says the target is checked out, if anywhere
   ansible.builtin.set_fact:
@@ -191,6 +243,7 @@
   when: metafactory_cortex_path_before | length > 0
   changed_when: false
   failed_when: false
+  check_mode: false
 
 # See point (3) in the header. Everything about arc's behaviour here is
 # "exit 0, change nothing", so the refusal has to happen on this side.
@@ -246,6 +299,7 @@
     PATH: "{{ ansible_facts['user_dir'] }}/.bun/bin:{{ ansible_facts['env']['PATH'] }}"
   register: metafactory_cortex_list_after
   changed_when: false
+  check_mode: false
 
 - name: Note the installed checkout's path
   ansible.builtin.set_fact:
@@ -277,6 +331,15 @@
     chdir: "{{ metafactory_cortex_path }}"
   register: metafactory_cortex_head
   changed_when: false
+  check_mode: false
+
+- name: Read whether the installed checkout has been modified  # noqa: command-instead-of-module
+  ansible.builtin.command:
+    cmd: git status --porcelain
+    chdir: "{{ metafactory_cortex_path }}"
+  register: metafactory_cortex_status
+  changed_when: false
+  check_mode: false
 
 # The assertion the whole role exists for. Both values are in the message on
 # purpose: "the pin did not take" is not actionable, and the commit that DID
@@ -298,31 +361,77 @@
       verified by git in {{ metafactory_cortex_path }}.
     quiet: true
 
-# What the smoke loop reads. Set only after the assertion above, so the fact
-# exists on a host if and only if the commit was proved on that host - a fact
-# set before the check would be readable on a machine that failed it.
+# A commit is only an honest name for the code if the code is still the
+# commit. `git rev-parse HEAD` says nothing about the working tree, so a
+# checkout sitting at exactly the declared pin with edits on top would sail
+# through the assertion above and be reported downstream as "running <sha>"
+# while running something else. That is the same class of lie as an unpinned
+# install, arriving one step later, so it gets the same treatment.
+#
+# ONE WAY A LEGITIMATE INSTALL CAN TRIP THIS, so it is not mistaken for a
+# bug: arc runs `bun install` in the checkout, normally with
+# --frozen-lockfile (added automatically when the repo ships a committed
+# bun.lock, which cortex does), and frozen does not rewrite the lockfile.
+# But arc retries ONCE WITHOUT --frozen-lockfile when the frozen attempt
+# fails because the lockfile drifted from package.json (arc README), and
+# that retry can rewrite bun.lock - leaving `M bun.lock` here. Failing is
+# the right answer in that case, not a false positive: it means the
+# dependency set actually installed is not the one the pinned commit
+# declares, which is a determinism hole in the thing being measured. The
+# porcelain output in the message names the file, so the cause is visible
+# rather than inferred.
+- name: Assert the installed checkout is unmodified
+  ansible.builtin.assert:
+    that:
+      - (metafactory_cortex_status.stdout | trim) | length == 0
+    fail_msg: >-
+      The installed target is at the declared commit but its WORKING TREE IS
+      DIRTY, so the code on this machine is not the code
+      {{ metafactory_cortex_pin }} names.
+        checkout: {{ metafactory_cortex_path }}
+        git status --porcelain:
+          {{ metafactory_cortex_status.stdout | trim | replace('\n', '\n          ') }}
+      Nothing downstream may report this machine as running the declared
+      commit. Restore the checkout to the pin - `git -C
+      {{ metafactory_cortex_path }} checkout -- .` for modified tracked
+      files, `git -C {{ metafactory_cortex_path }} clean -fd` for untracked
+      ones - or `arc remove {{ metafactory_cortex_package }}` and re-run this
+      role for a clean install. On a test VM, destroy and re-provision.
+    success_msg: >-
+      {{ metafactory_cortex_path }} is clean.
+    quiet: true
+
+# What the smoke loop reads. Set only after BOTH assertions above, so the
+# fact exists on a host if and only if the commit was proved on that host and
+# the tree proved unmodified - a fact set before the checks would be readable
+# on a machine that failed them.
 - name: Record the verified commit for the smoke loop
   ansible.builtin.set_fact:
     metafactory_cortex_installed_commit: "{{ metafactory_cortex_head.stdout | trim }}"
 
 # --- RESIDUAL, stated rather than hidden -------------------------------
 #
-# Two things this role cannot close, both recorded so the next reader does
-# not have to re-derive them:
+# Three things this role cannot close, all recorded so the next reader does
+# not have to re-derive them. The first is the ~/.bun/install/cache leak in
+# the header - the big one, and the only one that blocks an acceptance
+# criterion. The other two:
 #
-# 1. The digest invariant above holds for the PATHS arc writes, and those are
-#    all pruned or unvisited. It does NOT cover the PARENT directories:
-#    vm-fingerprint.sh prunes `.local/share/metafactory` and `.local/bin`,
-#    but `.local` and `.local/share` are themselves printed by the find that
-#    builds the layer2 files list. On a VM where neither already exists, the
-#    first arc install creates them and the CORE digest moves by exactly
-#    those two path lines. In the documented stack it cannot happen - the
-#    nats_server role creates ~/.local/bin and the claude role creates
-#    ~/.local/share/claude before anything gets here - so listing this role
-#    after either of them is enough. A spec that runs metafactory_arc and
-#    metafactory_cortex with neither of those roles is the one arrangement
-#    where a before/after capture would differ, and the difference would be
-#    two directory names, not the target's contents.
+# 1. Beyond the paths arc writes, the prune does NOT cover their PARENT
+#    directories: vm-fingerprint.sh prunes `.local/share/metafactory` and
+#    `.local/bin`, but `.local` and `.local/share` are themselves printed by
+#    the find that builds the layer2 files list. On a VM where they do not
+#    already exist, the first arc install creates them and the CORE digest
+#    moves by exactly those path lines.
+#
+#    Only the claude role closes both: it writes
+#    ~/.local/share/claude/versions/<ver>, creating `.local` AND
+#    `.local/share`. nats_server is NOT sufficient on its own - it creates
+#    `.local/bin`, which brings `.local` into being but leaves `.local/share`
+#    to be created by whatever first needs it, which on a spec without claude
+#    is this role. So the safe statement is: list `claude` before this role,
+#    or accept that the first capture on a claude-less spec moves by one
+#    directory name. Either way the difference is a path line, not the
+#    target's contents.
 #
 # 2. The pin fixes cortex's own commit and nothing else. cortex's
 #    arc-manifest.yaml declares depends_on.packages - five adapter/renderer
