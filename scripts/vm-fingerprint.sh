@@ -134,10 +134,6 @@ section "layer2 files"
 #
 # Fails (ii), not content-stable:
 #   $d/state               claude lock files.
-#   $d/install/cache/*.npm compressed download blobs, not byte-stable across
-#                          installs. The extracted package trees next to them
-#                          ARE stable, are what global/node_modules symlinks
-#                          into, and stay in.
 #
 # Fails (i), it is the software under test:
 #   $d/share/metafactory   arc installs packages into
@@ -159,6 +155,29 @@ section "layer2 files"
 #                          into the hashed set: the targets name, plus a shim
 #                          body naming the targets install path. Pruning
 #                          share/metafactory alone does not stop that.
+#   $d/install/cache       the same failure arriving by a third door - and it
+#                          fails (ii) as well. This used to be pruned by
+#                          extension only, as $d/install/cache/*.npm, keeping
+#                          the extracted package trees beside those blobs on
+#                          the grounds that they are byte-stable and are what
+#                          global/node_modules links into. That reading held
+#                          while bun was the only thing growing this directory.
+#                          It does not hold now: an arc-installed target runs
+#                          bun install for its own dependencies, so the TARGET
+#                          populates the cache, and the environment digest then
+#                          moves every time the software under test changes a
+#                          dependency. It fails (ii) too, because those trees
+#                          are transitively unpinned - a rebuild from the same
+#                          definition can resolve a different transitive
+#                          version and digest differently with nothing about
+#                          the environment having changed. So the cache goes
+#                          WHOLESALE, blobs and extracted trees alike. Bun the
+#                          tool keeps its identity in layer2 versions below
+#                          (bun --version), which is already where the $d/bin
+#                          prune left it: .bun/bin is inside that prune too, so
+#                          the bun binary itself has not been hashed since it
+#                          landed. install/global is NOT pruned - the set of
+#                          globally installed packages stays in the listing.
 #
 # Why bin is pruned WHOLESALE and not just the shims arc owns - crucible#14
 # option (a), chosen over option (b). Option (b) needs a marker this script
@@ -174,8 +193,18 @@ section "layer2 files"
 # The cost of (a), stated plainly: bin/nats-server is a real binary here and
 # its hash leaves the digest along with it. That is accepted. Everything in
 # bin is a dispatcher - a shim body is an install path, a fact about where and
-# not about what - and the thing it dispatches to still lives under a tree
-# that IS hashed (the bun global node_modules, the extracted install cache).
+# not about what - and what it dispatches to is named in layer2 versions below
+# by version or resolved ref. That last clause used to read "still lives under
+# a tree that IS hashed (the bun global node_modules, the extracted install
+# cache)", and neither half of it holds as written. The install cache is
+# pruned wholesale now, for the reasons above. And install/global carried
+# nothing for the bun-link install path arc uses: bun links those trees rather
+# than copying them, the pass is -type f, and that is why the captures quoted
+# in evidence/ac-0.md have no install/global hash line at all - only the
+# install/global readlink that layer2 versions records. That is a fact about
+# the install path, not about the directory: a bun add -g would copy regular
+# files there and they WOULD be hashed - which is correct, and wanted. A tool
+# installed globally is environment, and environment belongs in the digest.
 # The tooling identity bin used to carry is carried by layer2 versions below,
 # which names nats-server, bun, claude and arc explicitly. If a tool is ever
 # added to bin without a line there it leaves the fingerprint silently -
@@ -186,11 +215,11 @@ section "layer2 files"
 # target is under test. Tooling is environment; the target is not.
 for d in .local .bun; do
   [ -d "$d" ] || continue
-  find "$d" -path "$d/state" -prune -o -path "$d/share/metafactory" -prune -o -path "$d/bin" -prune -o ! -path "$d/install/cache/*.npm" -print
+  find "$d" -path "$d/state" -prune -o -path "$d/share/metafactory" -prune -o -path "$d/bin" -prune -o -path "$d/install/cache" -prune -o -print
 done | sort
 for d in .local .bun; do
   [ -d "$d" ] || continue
-  find "$d" -path "$d/state" -prune -o -path "$d/share/metafactory" -prune -o -path "$d/bin" -prune -o -type f ! -path "$d/install/cache/*.npm" -print0 | xargs -0 -r sha256sum
+  find "$d" -path "$d/state" -prune -o -path "$d/share/metafactory" -prune -o -path "$d/bin" -prune -o -path "$d/install/cache" -prune -o -type f -print0 | xargs -0 -r sha256sum
 done | sort -k2
 
 section "layer2 versions"
