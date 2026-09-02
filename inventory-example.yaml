@@ -41,17 +41,23 @@ ipv4: dhcp
 #
 # The target is not part of the environment's identity, and every path arc
 # writes for it is pruned from the capture or never walked - including
-# ~/.bun/install/cache, which smithy#27 now prunes wholesale. So a capture
-# taken after this role has the same core digest as one taken before it. The
-# header of ansible/roles/metafactory_cortex/tasks/main.yaml carries the full
-# argument and points at upstream's receipt for the fix.
+# ~/.bun/install/cache, which smithy#27 now prunes wholesale. So on a host
+# where ~/.local and ~/.local/share already exist, a capture taken after this
+# role has the same core digest as one taken before it. The header of
+# ansible/roles/metafactory_cortex/tasks/main.yaml carries the full argument
+# and points at upstream's receipt for the fix.
 #
-# Two things it does not cover. Listing `claude` before this role matters: it
-# is the only role that creates both ~/.local and ~/.local/share, whose
-# absence would otherwise move the digest by a directory name on the first
-# install. And the pin fixes cortex's own commit only - its dependency repos
-# install unpinned (an arc-side gap, the-metafactory/arc#398). That no longer
-# moves the digest, but it does mean the source tree under reposDir is not
+# That condition is why `claude` leads the list below rather than sitting
+# anywhere in it: it is the only role that creates both ~/.local and
+# ~/.local/share. On a spec that omits it - which is a valid spec - the first
+# install of the target creates those directories itself and the core digest
+# moves by exactly those path lines. This ordering is an EXAMPLE, not a
+# dependency contract; declaring and checking it properly is upstream's
+# planned role-dependency follow-up, not something this role can enforce.
+#
+# Separately, the pin fixes cortex's own commit only - its dependency repos
+# install unpinned (an arc-side gap, the-metafactory/arc#398). That one does
+# not move the digest, but it does mean the source tree under reposDir is not
 # fully determined by the pin.
 #
 # assay_env goes LAST. It installs nothing: it fingerprints whatever the roles

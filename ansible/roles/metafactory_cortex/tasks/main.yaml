@@ -16,9 +16,11 @@
 # thing under test moved could not answer the one question the digest exists
 # for - "were these two runs performed under the same conditions?" - and
 # "same environment, two target versions" is the comparison the whole
-# exercise is built on. THE INVARIANT HOLDS on current main. Every path arc
-# writes for the target is pruned from the capture or never walked at all,
-# and the list below is the whole of it.
+# exercise is built on. THE INVARIANT HOLDS on current main WHEN THE PARENT
+# DIRECTORIES THE CAPTURE WALKS ALREADY EXIST - see the qualifier below, and
+# residual 1 at the foot of this file. Every path arc writes for the target
+# is pruned from the capture or never walked at all, and the list below is
+# the whole of it; what is not pruned is the parents those paths hang from.
 #
 # Out of reach:
 #
@@ -55,13 +57,21 @@
 # smithy#27 closed it by pruning the cache wholesale, the same call already
 # made for `bin` and `share/metafactory`.
 #
-# So a capture taken before this role runs and one taken after have an
-# identical CORE digest, and the digest-identity acceptance criterion this
-# role was written against (crucible#26: "a capture taken before and after
-# this role runs has an identical core digest") is satisfied by the
-# fingerprint script as it stands. Nothing in this role has to make that
-# pass; nothing in this role can break it either, which is the point - the
-# guarantee lives above the seam.
+# So on a host where ~/.local and ~/.local/share already exist, a capture
+# taken before this role runs and one taken after have an identical CORE
+# digest, and the digest-identity acceptance criterion this role was written
+# against (crucible#26: "a capture taken before and after this role runs has
+# an identical core digest") is satisfied by the fingerprint script as it
+# stands. Nothing in this role has to make that pass; nothing in this role
+# can break it either - the guarantee lives above the seam.
+#
+# THE QUALIFIER IS NOT DECORATION. On a spec that omits the `claude` role -
+# a perfectly valid spec - those parents may not exist, and the FIRST
+# install of the target creates them. The capture then moves by exactly
+# those directory path lines. The example ordering in inventory-example.yaml
+# happens to list `claude` first, but a commented example is not a
+# dependency contract and must not be read as one. Residual 1 at the foot of
+# this file has the mechanism.
 #
 # Upstream's own receipt for the fix is the check, not this paragraph:
 # evidence/op-20260901-post-pr-27-fingerprint-diff.md diffs a capture taken
@@ -72,11 +82,12 @@
 #
 # The target is therefore recorded by REFERENCE - name plus resolved commit -
 # in the run receipt rather than by inclusion in the digest, which is what
-# metafactory_cortex_installed_commit below is for. Two edges remain that the
-# digest no longer feels: cortex's dependency repos install unpinned
-# (the-metafactory/arc#398), and the first install can create parent
-# directories the prune does not cover. Both are in the RESIDUAL note at the
-# end of this file.
+# metafactory_cortex_installed_commit below is for. Two edges remain, and
+# they are not the same kind: the first install can create parent
+# directories the prune does not cover, which DOES move the core digest on a
+# host lacking them, and cortex's dependency repos install unpinned
+# (the-metafactory/arc#398), which does not. Both are in the RESIDUAL note
+# at the end of this file.
 #
 # THREE THINGS ABOUT arc v0.45.0 THAT SHAPE EVERY TASK BELOW, all read out of
 # the pinned source rather than assumed:
@@ -276,6 +287,28 @@
     - metafactory_cortex_head_before.rc | default(1) != 0
       or (metafactory_cortex_head_before.stdout | default('', true) | trim) != metafactory_cortex_pin | string
 
+# CHECK MODE, and the one case it used to get wrong (smithy#30 review).
+#
+# Ansible skips the install task below under --check, which is correct - it
+# writes. But every read in the proof block after it carries
+# `check_mode: false` and therefore DOES run. On a host where the target is
+# not installed yet, those reads describe a machine the install was never
+# allowed to touch: arc still reports no package, and the "Refuse to report a
+# commit" gate fires. A dry run would reject a host a real run provisions
+# perfectly well, which is the opposite of what --check is for.
+#
+# So a dry run has to MODEL the pending install rather than measure its
+# absence. This fact is the switch, and it is deliberately narrow: it is true
+# only when check mode and a missing checkout coincide. A --check run against
+# a host that already HAS the target keeps taking the full proof path
+# unchanged - there the reads describe real disk, the assertions are
+# meaningful, and a dry run that verifies an existing install is exactly the
+# reassurance worth having.
+- name: Note whether this run would install the target
+  ansible.builtin.set_fact:
+    metafactory_cortex_install_pending: >-
+      {{ ansible_check_mode | bool and metafactory_cortex_path_before | length == 0 }}
+
 # Only reached when there is no checkout at all, which is also the only case
 # in which arc honours --pin. Re-running with the SAME pin skips this task
 # entirely, which is the role's idempotence claim: a second run reports zero
@@ -309,6 +342,7 @@
   environment:
     PATH: "{{ ansible_facts['user_dir'] }}/.bun/bin:{{ ansible_facts['env']['PATH'] }}"
   register: metafactory_cortex_list_after
+  when: not metafactory_cortex_install_pending | bool
   changed_when: false
   check_mode: false
 
@@ -323,6 +357,7 @@
         | map(attribute='installPath')
         | list | first | default('', true)
       }}
+  when: not metafactory_cortex_install_pending | bool
 
 - name: Refuse to report a commit for a checkout that is not there
   ansible.builtin.fail:
@@ -334,13 +369,16 @@
       metafactory_cortex_package to match it. Nothing has been asserted
       about this machine, so it holds no verified target commit.
       arc install said: {{ metafactory_cortex_install.stdout | default('(the install step did not run)', true) }}
-  when: metafactory_cortex_path | length == 0
+  when:
+    - not metafactory_cortex_install_pending | bool
+    - metafactory_cortex_path | default('', true) | length == 0
 
 - name: Read the installed checkout's HEAD  # noqa: command-instead-of-module
   ansible.builtin.command:
     cmd: git rev-parse HEAD
     chdir: "{{ metafactory_cortex_path }}"
   register: metafactory_cortex_head
+  when: not metafactory_cortex_install_pending | bool
   changed_when: false
   check_mode: false
 
@@ -349,6 +387,7 @@
     cmd: git status --porcelain
     chdir: "{{ metafactory_cortex_path }}"
   register: metafactory_cortex_status
+  when: not metafactory_cortex_install_pending | bool
   changed_when: false
   check_mode: false
 
@@ -371,6 +410,7 @@
       {{ metafactory_cortex_package }} is at {{ metafactory_cortex_pin }},
       verified by git in {{ metafactory_cortex_path }}.
     quiet: true
+  when: not metafactory_cortex_install_pending | bool
 
 # A commit is only an honest name for the code if the code is still the
 # commit. `git rev-parse HEAD` says nothing about the working tree, so a
@@ -411,6 +451,7 @@
     success_msg: >-
       {{ metafactory_cortex_path }} is clean.
     quiet: true
+  when: not metafactory_cortex_install_pending | bool
 
 # What the smoke loop reads. Set only after BOTH assertions above, so the
 # fact exists on a host if and only if the commit was proved on that host and
@@ -419,14 +460,39 @@
 - name: Record the verified commit for the smoke loop
   ansible.builtin.set_fact:
     metafactory_cortex_installed_commit: "{{ metafactory_cortex_head.stdout | trim }}"
+  when: not metafactory_cortex_install_pending | bool
+
+# The dry-run counterpart to everything above: say what a real run would do,
+# report the host as CHANGED because it would be, and do not pretend to have
+# proved anything. metafactory_cortex_installed_commit is deliberately NOT
+# set here - the fact means "this commit was proved on this host", and in
+# check mode nothing was. A downstream receipt finding no fact is correct;
+# one finding a fact set by a dry run would be a lie with a sha in it.
+- name: Report the install this dry run would have performed
+  ansible.builtin.debug:
+    msg: >-
+      check mode: {{ metafactory_cortex_package }} is not installed on this
+      host, so a real run would install it at {{ metafactory_cortex_pin }}
+      from {{ metafactory_cortex_repo }}. The post-install proof - HEAD
+      equals the pin, working tree clean - is DEFERRED TO A REAL RUN,
+      because it reads a checkout that check mode was not allowed to create.
+      This host is reported changed, not verified, and no verified commit
+      has been recorded for it.
+  changed_when: true
+  when: metafactory_cortex_install_pending | bool
 
 # --- RESIDUAL, stated rather than hidden -------------------------------
 #
 # Two things this role cannot close, recorded so the next reader does not have
 # to re-derive them. A third used to head this list - the ~/.bun/install/cache
-# leak, the only one that blocked an acceptance criterion - and it is gone:
-# smithy#27 prunes the cache wholesale and is merged. Neither of the two below
-# moves the core digest.
+# leak, which made the digest move with the target's own dependency tree -
+# and it is gone: smithy#27 prunes the cache wholesale and is merged.
+#
+# Of the two that remain, the FIRST can still move the core digest, on a host
+# whose parent directories do not exist yet. It is a narrower failure than
+# the cache leak was - a fixed cost paid once, by directory name, not a
+# quantity that tracks the target - but it is not zero, and the invariant
+# above is stated with that condition attached rather than despite it.
 #
 # 1. Beyond the paths arc writes, the prune does NOT cover their PARENT
 #    directories: vm-fingerprint.sh prunes `.local/share/metafactory` and
@@ -443,7 +509,17 @@
 #    is this role. So the safe statement is: list `claude` before this role,
 #    or accept that the first capture on a claude-less spec moves by one
 #    directory name. Either way the difference is a path line, not the
-#    target's contents.
+#    target's contents - but "list claude first" is advice in a comment, and
+#    a spec that ignores it is still a valid spec, so this role cannot
+#    enforce it and does not claim to.
+#
+#    Where the real fix lands: the planned follow-up to model role
+#    dependencies explicitly, so an ordering requirement is declared and
+#    checked rather than written in prose and hoped for. That is upstream's
+#    refactor to make and is deliberately NOT attempted in this PR - a
+#    role-local workaround here (pre-creating the parents, say) would put a
+#    second, quieter answer in the tree and make the real one harder to
+#    land.
 #
 # 2. The pin fixes cortex's own commit and nothing else. cortex's
 #    arc-manifest.yaml declares depends_on.packages - five adapter/renderer
