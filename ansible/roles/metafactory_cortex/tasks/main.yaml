@@ -7,20 +7,20 @@
 # ORDERING relative to assay_env: cortex goes BEFORE it. assay_env is the
 # layer-2 capstone and records the environment's identity; the target is not
 # part of that identity (see the invariant below), so installing it first and
-# fingerprinting after is the ordering that matches the runbook, and the
-# recorded digest is the same either way - subject to the caveat below,
-# which applies whichever order they run in.
+# fingerprinting after is the ordering that matches the runbook. The recorded
+# digest is the same either way, and since smithy#27 that is true without
+# qualification rather than in principle.
 #
 # THE INVARIANT this role is written around: installing the target must not
 # move the CORE digest. An environment whose identity moved every time the
 # thing under test moved could not answer the one question the digest exists
 # for - "were these two runs performed under the same conditions?" - and
 # "same environment, two target versions" is the comparison the whole
-# exercise is built on. Most of what arc writes is already out of the
-# capture's reach, but ONE PATH BREAKS IT and the break is live - read both
-# halves below before trusting a digest taken around this role.
+# exercise is built on. THE INVARIANT HOLDS on current main. Every path arc
+# writes for the target is pruned from the capture or never walked at all,
+# and the list below is the whole of it.
 #
-# Out of reach already:
+# Out of reach:
 #
 #   ~/.local/share/metafactory/arc/repos/<pkg>   the clone (arc v0.45.0
 #       src/lib/paths.ts: reposDir = <XDG data>/metafactory/arc/repos on the
@@ -34,38 +34,49 @@
 #   ~/.claude/skills|agents|...                  arc's host drops. Same - not
 #       walked.
 #
-# THE INVARIANT DOES NOT HOLD TODAY. Stated here rather than discovered by
-# whoever first diffs two captures:
+#   ~/.bun/install/cache                         the download blobs and the
+#       extracted package trees bun writes when arc runs `bun install` in the
+#       target's repo (arc README, "If a package's repo root has a
+#       package.json with dependencies"). Pruned WHOLESALE - smithy#27,
+#       merged. Confirm it on this tree rather than trusting this comment:
+#       scripts/vm-fingerprint.sh carries `-path "$d/install/cache" -prune`
+#       in BOTH layer2 find passes, the name walk and the content hash. A
+#       prune present in only one of the two would still move the digest.
 #
-#   ~/.bun/install/cache   IS hashed into CORE, and this install populates
-#       it. vm-fingerprint.sh excludes only `$d/install/cache/*.npm` - the
-#       compressed download blobs - and deliberately keeps the EXTRACTED
-#       package trees beside them ("are what global/node_modules symlinks
-#       into, and stay in"). arc runs `bun install` in the target's repo
-#       after landing symlinks (arc README, "If a package's repo root has a
-#       package.json with dependencies"), and cortex has a large dependency
-#       tree, so installing the target writes hundreds of extracted package
-#       directories straight into the hashed set. On this workstation the
-#       cache holds 154 `.npm` blobs (excluded) beside 614 other entries
-#       (hashed).
+# The last entry is called out because it was NOT always true, and the
+# history is the reason to trust the current state rather than re-litigate
+# it. The prune used to match `$d/install/cache/*.npm` - the compressed
+# download blobs only - and deliberately kept the extracted package trees
+# beside them. That reading held while bun was the only thing growing the
+# directory. It stopped holding once an arc-installed target ran `bun
+# install` for its own dependencies: the TARGET then populated the hashed
+# set, and the environment digest moved with the target's dependency tree,
+# which is precisely the coupling the two-plane split exists to prevent.
+# smithy#27 closed it by pruning the cache wholesale, the same call already
+# made for `bin` and `share/metafactory`.
 #
-# So a capture taken before and after this role runs WILL differ in CORE
-# today, and the digest would move with the target's dependency tree - which
-# is precisely the coupling the split exists to prevent. The fix belongs in
-# vm-fingerprint.sh, above the seam, not here: prune `install/cache`
-# wholesale, the same call already made for `bin` and `share/metafactory`.
-# It is in flight upstream as fix/prune-bun-install-cache. Until that lands,
-# this role's digest-identity acceptance criterion (crucible#26: "a capture
-# taken before and after this role runs has an identical core digest") CANNOT
-# PASS, and nothing here can make it pass.
+# So a capture taken before this role runs and one taken after have an
+# identical CORE digest, and the digest-identity acceptance criterion this
+# role was written against (crucible#26: "a capture taken before and after
+# this role runs has an identical core digest") is satisfied by the
+# fingerprint script as it stands. Nothing in this role has to make that
+# pass; nothing in this role can break it either, which is the point - the
+# guarantee lives above the seam.
 #
-# What IS already true, and is what the fix completes rather than creates:
-# every path arc writes for the target itself is pruned or never visited, so
-# once the cache leak is closed the invariant holds without further work. The
-# target is recorded by reference (name plus resolved commit) in the run
-# receipt instead - which is what metafactory_cortex_installed_commit below
-# is for. See the RESIDUAL note at the end of this file for the remaining
-# edges.
+# Upstream's own receipt for the fix is the check, not this paragraph:
+# evidence/op-20260901-post-pr-27-fingerprint-diff.md diffs a capture taken
+# before smithy#27 against one taken after. The only lines that move are the
+# 537 `.bun/install/cache` entries leaving the walk, and the core and
+# combined digests that necessarily follow them. No other path in the
+# capture shifted - so the fix removed the leak and nothing else.
+#
+# The target is therefore recorded by REFERENCE - name plus resolved commit -
+# in the run receipt rather than by inclusion in the digest, which is what
+# metafactory_cortex_installed_commit below is for. Two edges remain that the
+# digest no longer feels: cortex's dependency repos install unpinned
+# (the-metafactory/arc#398), and the first install can create parent
+# directories the prune does not cover. Both are in the RESIDUAL note at the
+# end of this file.
 #
 # THREE THINGS ABOUT arc v0.45.0 THAT SHAPE EVERY TASK BELOW, all read out of
 # the pinned source rather than assumed:
@@ -411,10 +422,11 @@
 
 # --- RESIDUAL, stated rather than hidden -------------------------------
 #
-# Three things this role cannot close, all recorded so the next reader does
-# not have to re-derive them. The first is the ~/.bun/install/cache leak in
-# the header - the big one, and the only one that blocks an acceptance
-# criterion. The other two:
+# Two things this role cannot close, recorded so the next reader does not have
+# to re-derive them. A third used to head this list - the ~/.bun/install/cache
+# leak, the only one that blocked an acceptance criterion - and it is gone:
+# smithy#27 prunes the cache wholesale and is merged. Neither of the two below
+# moves the core digest.
 #
 # 1. Beyond the paths arc writes, the prune does NOT cover their PARENT
 #    directories: vm-fingerprint.sh prunes `.local/share/metafactory` and
@@ -437,7 +449,18 @@
 #    arc-manifest.yaml declares depends_on.packages - five adapter/renderer
 #    repos - and arc installs those with `install({ repoUrl: dep.repo })`,
 #    passing no pinnedRef (src/commands/install.ts). They therefore land on
-#    whatever their default branch is at the time. That does not touch the
-#    core digest (same pruned tree) and does not affect the commit this role
-#    asserts, but the tree under reposDir is not fully determined by the pin,
-#    and a claim that it is would be wrong.
+#    whatever their default branch is at the time. This is an arc-side gap,
+#    not a smithy one, and it is tracked as the-metafactory/arc#398.
+#
+#    What it does NOT do, since smithy#27: move the core digest. The whole of
+#    reposDir sits under the pruned `share/metafactory`, so an unpinned
+#    dependency landing on a newer commit changes nothing the capture hashes,
+#    and it does not affect the commit this role asserts either - that is
+#    cortex's own HEAD, which the pin fixes and the self-assert proves.
+#
+#    What it still costs is full-tree determinism: two runs at the SAME pin
+#    can have different dependency source under reposDir. The environment is
+#    reproducible and the target's own commit is reproducible; the target's
+#    transitive source is not, and a claim that the pin fixes everything
+#    installed would be wrong. It matters for anyone reasoning about a result
+#    from the tree rather than from the pin.

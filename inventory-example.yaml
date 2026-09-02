@@ -39,15 +39,20 @@ ipv4: dhcp
 # goes before assay_env, which is the order the runbook reads in: install the
 # target, then fingerprint.
 #
-# The target is not MEANT to be part of the environment's identity, and
-# everything arc writes for it is pruned from the capture - except one path.
-# ~/.bun/install/cache is still hashed into CORE and `bun install` populates
-# it, so today a capture taken after this role differs from one taken before.
-# See the header of ansible/roles/metafactory_cortex/tasks/main.yaml; the fix
-# belongs in scripts/vm-fingerprint.sh and is in flight upstream. Listing
-# `claude` before this role also matters: it is the only role that creates
-# both ~/.local and ~/.local/share, whose absence would otherwise move the
-# digest by a directory name on the first install.
+# The target is not part of the environment's identity, and every path arc
+# writes for it is pruned from the capture or never walked - including
+# ~/.bun/install/cache, which smithy#27 now prunes wholesale. So a capture
+# taken after this role has the same core digest as one taken before it. The
+# header of ansible/roles/metafactory_cortex/tasks/main.yaml carries the full
+# argument and points at upstream's receipt for the fix.
+#
+# Two things it does not cover. Listing `claude` before this role matters: it
+# is the only role that creates both ~/.local and ~/.local/share, whose
+# absence would otherwise move the digest by a directory name on the first
+# install. And the pin fixes cortex's own commit only - its dependency repos
+# install unpinned (an arc-side gap, the-metafactory/arc#398). That no longer
+# moves the digest, but it does mean the source tree under reposDir is not
+# fully determined by the pin.
 #
 # assay_env goes LAST. It installs nothing: it fingerprints whatever the roles
 # before it put on the machine and writes that identity to
