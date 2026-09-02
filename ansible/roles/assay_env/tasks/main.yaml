@@ -24,12 +24,38 @@
 # user's authorized_keys and the sshd drop-ins; only the four-line DIGESTS
 # tail the script prints to stderr is read back.
 #
-# FAIL CLOSED. Capture, parse and the digest guard run inside a block whose
-# rescue REMOVES {{ assay_env_file }} before failing. Refusing to write is not
-# enough on a re-run: a file from an earlier run is still sitting on a machine
-# that may have moved since, and that file is what assay believes. An identity
-# this run could not confirm is withdrawn rather than left standing.
+# FAIL CLOSED. Everything that decides or writes the machine's identity -
+# capture, parse, the digest guard, the interchange directory, the document
+# and the write itself - runs inside ONE block whose rescue WITHDRAWS
+# {{ assay_env_file }} before failing. Refusing to write is not enough on a
+# re-run: a file from an earlier run is still sitting on a machine that may
+# have moved since, and that file is what assay believes. An identity this run
+# could not confirm is withdrawn rather than left standing.
+#
+# The write is inside the block for exactly the reason the capture is
+# (vpzed-dev/smithy#26 review): a copy that dies on a full disk, a permission
+# change or a dropped connection leaves the previous run's file describing a
+# machine nothing just verified - the same stale identity, reached from the
+# other end.
+#
+# And the withdrawal is VERIFIED, never assumed. Whatever breaks the write -
+# no space, a read-only filesystem, a lost connection - is frequently the same
+# thing that breaks the removal, so the rescue stats the path afterwards and
+# says plainly when the stale file is still there. A withdrawal this role only
+# attempted is never reported as one that happened.
 
+# The three refusals below sit OUTSIDE the fail-closed block DELIBERATELY, and
+# the review's softer ask - give pre-flight failures the same stale-file
+# handling - is declined on purpose. Every one of them is a CONTROL-NODE
+# misconfiguration: an empty capture path, no capture script in this checkout,
+# an inventory serving no ansible_host/ansible_user. The role has not run,
+# nothing has touched the guest, and the file already on it still describes
+# the machine the last successful run confirmed. Withdrawing an identity
+# because the operator launched the playbook from the wrong directory would
+# revoke a good machine's identity over a fault on this side of the SSH
+# connection, and would make one bad checkout's blast radius the whole fleet.
+# From the capture command onward the guest is in play, and everything from
+# there down is inside the block.
 - name: Refuse to capture without a capture path
   ansible.builtin.fail:
     msg: >-
@@ -119,32 +145,108 @@
         or 'provider' not in assay_env_digests
         or 'combined' not in assay_env_digests
 
+    # Inside the block, with the write: the interchange file is the identity,
+    # and every step that leads to it has to answer for a stale one.
+    - name: Create the interchange directory
+      ansible.builtin.file:
+        path: "{{ assay_env_file | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      become: true
+
+    # schema is the number 1, not the string "1": assay refuses a schema it
+    # does not know, and "1" is not 1. Unquoted here, so it stays an int
+    # through to_nice_json and lands in the file as a JSON number.
+    #
+    # combined is deliberately absent. It is a capture-side convenience for
+    # diffing whole captures; the contract's fields are schema, core_digest,
+    # provider_digest, provider and definition, and an extra key buys
+    # nothing.
+    - name: Assemble the interchange document
+      ansible.builtin.set_fact:
+        assay_env_document:
+          schema: 1
+          core_digest: "{{ assay_env_digests.core }}"
+          provider_digest: "{{ assay_env_digests.provider }}"
+          provider: "{{ assay_env_provider }}"
+          definition: "{{ assay_env_definition }}"
+
+    # copy reports changed only when the bytes differ, so a re-run on a
+    # machine that has not moved is green and unchanged without a
+    # changed_when of its own. That is the idempotence claim: the file
+    # follows the machine, not the run.
+    - name: Write the assay environment file
+      ansible.builtin.copy:
+        dest: "{{ assay_env_file }}"
+        content: "{{ assay_env_document | to_nice_json }}\n"
+        owner: root
+        group: root
+        mode: "0644"
+      become: true
+
   rescue:
     # The machine keeps no identity this run could not confirm. Absent when
     # there was nothing to remove, so `changed` below distinguishes "an
     # identity was withdrawn" from "there was never one".
+    #
+    # failed_when: false so a removal that cannot succeed does not abort the
+    # rescue before it can SAY so. Whatever broke the write - a full disk, a
+    # read-only remount, a permission change - can break the unlink too, and
+    # a rescue that died here would fail the play with the removal's errno
+    # and not one word about the stale file left standing.
     - name: Withdraw any environment file an earlier run left behind
       ansible.builtin.file:
         path: "{{ assay_env_file }}"
         state: absent
       become: true
       register: assay_env_withdrawn
+      failed_when: false
 
-    # One task, not two guarded by `when: ... .changed` - that idiom reads as
-    # a missing handler to ansible-lint (no-handler), and a handler is exactly
-    # what this must not be: it has to fail the play, now, on this host.
+    # Trust the filesystem, not the module's report. This stat is the only
+    # evidence that the withdrawal actually happened, and the message below
+    # is written from it: claiming a removal that did not occur is the same
+    # class of lie as an environment file naming a digest nobody computed.
+    - name: Confirm the withdrawal by looking for the file
+      ansible.builtin.stat:
+        path: "{{ assay_env_file }}"
+      become: true
+      register: assay_env_after_withdrawal
+
+    # One task, not several guarded by `when: ... .changed` - that idiom
+    # reads as a missing handler to ansible-lint (no-handler), and a handler
+    # is exactly what this must not be: it has to fail the play, now, on this
+    # host. Four branches, because there are four honest endings: check mode
+    # (nothing is ever removed under --check), the file survived the removal,
+    # the file was removed, and there was never a file.
     - name: Refuse to leave the machine holding an unconfirmed identity
       ansible.builtin.fail:
         msg: >-
           Fingerprinting failed at "{{ ansible_failed_task.name }}":
           {{ ansible_failed_result.msg | default('no message given') }}
           {{
+          'This is a --check run, so nothing was removed: the environment
+          file at ' ~ assay_env_file ~ ' is still there and WOULD HAVE BEEN
+          withdrawn on a real run. Nothing on the machine has been changed
+          either way.'
+          if ansible_check_mode and assay_env_withdrawn.changed else
           'The environment file an earlier run wrote at ' ~ assay_env_file ~
-          ' has been REMOVED. It described a machine this run could not
-          confirm, and a stale identity is worse than none: assay reports
-          env@none for a machine with no file, which is a true statement,
-          where it would otherwise have reported a digest nothing had just
-          verified.'
+          ' COULD NOT BE REMOVED (' ~
+          (assay_env_withdrawn.msg | default('no message given')) ~
+          '), and it is STILL ON THE MACHINE. It describes a machine this
+          run could not confirm, so assay will keep reporting a digest
+          nothing has verified: treat that digest as UNVERIFIED and this
+          host as untrusted until the file is gone. Whatever broke the write
+          is the likeliest thing to have broken the removal, so fix that
+          first, then delete the file by hand or re-run this role.'
+          if assay_env_after_withdrawal.stat.exists else
+          'The environment file an earlier run wrote at ' ~ assay_env_file ~
+          ' has been REMOVED, and its absence confirmed. It described a
+          machine this run could not confirm, and a stale identity is worse
+          than none: assay reports env@none for a machine with no file,
+          which is a true statement, where it would otherwise have reported
+          a digest nothing had just verified.'
           if assay_env_withdrawn.changed else
           'No environment file was present at ' ~ assay_env_file ~ ' and
           none has been written, so the machine presents no identity at all
@@ -152,41 +254,3 @@
           }}
           Fix the capture and re-run to restore it; the capture is at
           {{ assay_env_capture_path }}.
-
-- name: Create the interchange directory
-  ansible.builtin.file:
-    path: "{{ assay_env_file | dirname }}"
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
-  become: true
-
-# schema is the number 1, not the string "1": assay refuses a schema it does
-# not know, and "1" is not 1. Unquoted here, so it stays an int through
-# to_nice_json and lands in the file as a JSON number.
-#
-# combined is deliberately absent. It is a capture-side convenience for
-# diffing whole captures; the contract's fields are schema, core_digest,
-# provider_digest, provider and definition, and an extra key buys nothing.
-- name: Assemble the interchange document
-  ansible.builtin.set_fact:
-    assay_env_document:
-      schema: 1
-      core_digest: "{{ assay_env_digests.core }}"
-      provider_digest: "{{ assay_env_digests.provider }}"
-      provider: "{{ assay_env_provider }}"
-      definition: "{{ assay_env_definition }}"
-
-# copy reports changed only when the bytes differ, so a re-run on a machine
-# that has not moved is green and unchanged without a changed_when of its
-# own. That is the idempotence claim: the file follows the machine, not the
-# run.
-- name: Write the assay environment file
-  ansible.builtin.copy:
-    dest: "{{ assay_env_file }}"
-    content: "{{ assay_env_document | to_nice_json }}\n"
-    owner: root
-    group: root
-    mode: "0644"
-  become: true
