@@ -1,0 +1,36 @@
+# The layer-2 capstone's knobs. Everything here is context for the file the
+# role writes; none of it is identity - the identity is the digest, computed
+# from the machine by scripts/vm-fingerprint.sh and never supplied here.
+
+# Control-node path to the capture script. playbook_dir is ansible/, so its
+# dirname is the repo root - the same checkout the playbook was launched
+# from, which is what keeps this role from carrying its own copy of the
+# script.
+assay_env_fingerprint_script: "{{ playbook_dir | dirname }}/scripts/vm-fingerprint.sh"
+
+# Where the capture lands on the CONTROL node, not the guest. Under
+# fingerprints/, which .gitignore excludes wholesale (`fingerprints/**`, with
+# only .gitkeep re-admitted): a capture carries the login user's
+# authorized_keys and the sshd drop-ins, so it is the operator's private
+# overlay and is never committed. Must be non-empty - see the refusal in
+# tasks/main.yaml for why.
+assay_env_capture_path: "{{ playbook_dir | dirname }}/fingerprints/{{ inventory_hostname }}.txt"
+
+# Which factory backend built this machine. Context for a human reading a
+# drift report; assay never compares it (assay environments/README.md).
+#
+# Hardcoded here rather than read from a hostvar because nothing upstream
+# carries it yet: inventory/tofu.py builds hostvars from the vm-pve module's
+# output, and that module is the only provider in this tree. When a second
+# provider module lands, this belongs in the tofu output next to ansible_host
+# and this default becomes the fallback, not the answer.
+assay_env_provider: "proxmox-ve"
+
+# Path, in the factory's repo, of the file that declared this environment -
+# the per-VM spec inventory/<name>.yaml that tofu reads. Context, not
+# identity. inventory_hostname is the VM name, which is the spec's filename.
+assay_env_definition: "inventory/{{ inventory_hostname }}.yaml"
+
+# Where assay looks. ASSAY_ENVIRONMENT_FILE can override it at run time, but
+# the fleet writes the contract's default path.
+assay_env_file: /etc/assay/environment.json

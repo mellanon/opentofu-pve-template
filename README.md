@@ -34,7 +34,8 @@ overall testing workflow.
   false. Third-party repos (e.g. docker) are covered by explicit version pins
   in the ansible role defaults instead.
 - **Composable post-boot software.** A spec lists ansible roles, for example,
-  (`ansible_roles: [nats_server, bun, claude, docker, metafactory_arc]`) and
+  (`ansible_roles: [nats_server, bun, claude, docker, metafactory_arc,
+  assay_env]`) and
   `ansible-playbook ansible/site.yaml` applies them — idempotently, with every
   download verified and every version pinned. A dynamic inventory reads
   the tofu state, so there is no hosts file to maintain, and changing ansible 
@@ -73,7 +74,8 @@ overall testing workflow.
 │   ├── site.yaml                  # base, then each VM's declared roles
 │   ├── inventory/tofu.py          # dynamic inventory from tofu output
 │   └── roles/<role>/              # base (every VM), then nats_server, bun,
-│                                  # claude, docker, metafactory_arc
+│                                  # claude, docker, metafactory_arc,
+│                                  # assay_env (last: fingerprint + interchange)
 ├── inventory/             # one YAML file per VM                       [EDIT]
 ├── scripts/               # build-image.sh, check-ansible.sh,
 │                          # install-collections.sh, vm-fingerprint.sh
@@ -322,10 +324,23 @@ declarative grammar as the rest of the repo:
   `claude` (vendor installer, binary verified against the release manifest
   first), `metafactory_arc` (pinned git tag + `bun install`/`bun link`; needs
   `git` in the VM's packages, and `bun` earlier in the role list — spec order
-  is application order), and `docker` — the only role using `become` — which
-  pins the signing key by full GPG fingerprint, writes a deb822 source,
-  installs version-pinned packages, and manages `daemon.json` with a restart
-  handler.
+  is application order), and `docker` — which pins the signing key by full GPG
+  fingerprint, writes a deb822 source, installs version-pinned packages, and
+  manages `daemon.json` with a restart handler.
+- **`assay_env` is the capstone, and installs nothing.** Listed last, it runs
+  `scripts/vm-fingerprint.sh` from the control node (`delegate_to: localhost`),
+  parses the capture's `DIGESTS` block, and writes
+  `/etc/assay/environment.json` — the interchange
+  [assay](https://github.com/the-metafactory/assay/blob/main/environments/README.md)
+  reads to learn which environment a result was produced under. It and `docker`
+  are the only *spec-declared* roles using `become` — the implicit `base` role
+  uses it throughout. A missing or malformed digest fails the role before
+  anything is written, and revokes any environment file an earlier run left
+  behind: a file naming a digest that was never computed is worse than no
+  file, and so is one naming a digest this run could not confirm. The capture
+  lands under gitignored
+  `fingerprints/` and is never registered as content — it carries the guest's
+  `authorized_keys`.
 - **Host-key checking is off** in `ansible.cfg` (same stance as
   `vm-fingerprint.sh`): host keys are per-instance noise in a fleet where
   rebuilds are routine, and `accept-new` would poison `known_hosts` on first
